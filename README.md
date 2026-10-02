@@ -87,6 +87,13 @@ The plugin intentionally does not silently overwrite a location whose current by
 
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 21**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
+## 1.2.1 Changes
+
+- Patches can now be edited while enabled or disabled; manual disabling is no longer required.
+- Enabled-patch byte changes use a single disable/update/re-enable transaction according to the editor's **Apply patch immediately** setting, followed by one automatic re-disassembly pass.
+- Patch state is revalidated after the editor closes to avoid overwriting an intervening external change.
+- Patch Info byte fields have a slightly larger default display area.
+
 ## 1.2.0 Changes
 
 - Added optional state-colored patch highlighting in the CodeBrowser.

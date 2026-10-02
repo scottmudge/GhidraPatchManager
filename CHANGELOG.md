@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.1
+- Better patch editing, allowing editing of patches regardless of enabled/disabled status.
+
 ## 1.2.0
 - Added optional patch-location highlighting in the CodeBrowser, enabled by default.
 - Enabled patches use a brownish-orange background; disabled patches use a purplish-lavender background.

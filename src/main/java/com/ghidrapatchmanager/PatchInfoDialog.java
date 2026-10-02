@@ -162,7 +162,7 @@ final class PatchInfoDialog extends DialogComponentProvider {
         panel.add(new JLabel(labelText + ":"), label);
 
         JScrollPane scroll = new JScrollPane(area);
-        scroll.setPreferredSize(new Dimension(500, 80));
+        scroll.setPreferredSize(new Dimension(500, 105));
         GridBagConstraints content = new GridBagConstraints();
         content.gridx = 1;
         content.gridy = row;
@@ -309,7 +309,7 @@ final class PatchInfoDialog extends DialogComponentProvider {
     }
 
     private static JTextArea createByteArea() {
-        JTextArea area = new JTextArea(4, 40);
+        JTextArea area = new JTextArea(6, 40);
         area.setEditable(false);
         area.setLineWrap(false);
         area.setWrapStyleWord(false);

@@ -563,10 +563,11 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (!canEditPatches() || provider.getSelectedPatch() == null) {
             return;
         }
+
         Patch patch = provider.getSelectedPatch();
-        PatchState state = patch.getState(this);
-        if (state != PatchState.DISABLED) {
-            showInfo("Disable this patch before editing it.\n\nCurrent state: " + state, "Edit Patch");
+        PatchState stateBeforeDialog = patch.getState(this);
+        if (!isToggleState(stateBeforeDialog)) {
+            showConflict(patch, stateBeforeDialog);
             return;
         }
 
@@ -574,26 +575,193 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (result == null) {
             return;
         }
-        boolean definitionChanged = !Arrays.equals(result.patchedBytes(), patch.patchedBytes)
-                || !result.name().equals(patch.name);
-        if (!definitionChanged && !result.enabled()) {
+
+        // Refuse to overwrite an intervening external change made while the editor was open.
+        PatchState stateAfterDialog = patch.getState(this);
+        if (stateAfterDialog != stateBeforeDialog) {
+            showConflict(patch, stateAfterDialog);
             return;
         }
-        if (result.address().equals(patch.address) && !Arrays.equals(result.originalBytes(), patch.originalBytes)) {
+
+        if (!result.address().equals(patch.address)) {
+            showError("Editing the address of an existing patch is not supported. Delete and recreate it instead.",
+                    "Edit Patch");
+            return;
+        }
+        if (!Arrays.equals(result.originalBytes(), patch.originalBytes)) {
             showError("The original bytes of an existing patch are immutable.", "Edit Patch");
             return;
         }
+
+        boolean bytesChanged = !Arrays.equals(result.patchedBytes(), patch.patchedBytes);
+        boolean nameChanged = !result.name().equals(patch.name);
+        boolean definitionChanged = bytesChanged || nameChanged;
+        boolean enabledBefore = stateBeforeDialog == PatchState.ENABLED;
+        boolean enabledAfter = result.enabled();
+
+        // Nothing changed, including enabled state.
+        if (!definitionChanged && enabledBefore == enabledAfter) {
+            return;
+        }
+
         Patch replacement = new Patch(result.name(), patch.address, patch.originalBytes, result.patchedBytes());
         if (!validateNewPatch(replacement, patch)) {
             return;
         }
+
+        // Editing an enabled patch with changed bytes must not use two independent asynchronous
+        // toggles. Perform the logical disable -> update -> optional re-enable in one transaction,
+        // then re-disassemble once against the final byte state.
+        if (enabledBefore && bytesChanged) {
+            editEnabledPatch(patch, replacement, enabledAfter);
+            return;
+        }
+
         patch.name = replacement.name;
         patch.patchedBytes = replacement.patchedBytes;
         saveToProgram();
         refreshProvider();
         provider.selectPatch(patch);
-        if (result.enabled()) {
-            setPatchEnabled(patch, true);
+
+        if (enabledBefore != enabledAfter) {
+            setPatchEnabled(patch, enabledAfter);
+        }
+        else {
+            provider.setStatus("Updated patch '" + patch.name + "'.");
+        }
+    }
+
+    private void editEnabledPatch(Patch patch, Patch replacement, boolean enabledAfter) {
+        if (!canEditPatches() || activeProgram == null) {
+            return;
+        }
+
+        PatchState state = patch.getState(this);
+        if (state != PatchState.ENABLED) {
+            showConflict(patch, state);
+            return;
+        }
+
+        Program program = activeProgram;
+        boolean committed = false;
+        boolean bytesRestored = false;
+        String oldName = patch.name;
+        byte[] oldPatchedBytes = patch.patchedBytes.clone();
+        ReassemblyRange reassemblyRange = prepareReassembly(patch.address, patch.getEndAddress());
+
+        busy = true;
+        internalChange = true;
+        int tx = program.startTransaction("Edit Ghidra patch");
+        try {
+            if (reassemblyRange != null) {
+                program.getListing().clearCodeUnits(
+                    reassemblyRange.start(),
+                    reassemblyRange.end(),
+                    false,
+                    TaskMonitor.DUMMY
+                );
+            }
+
+            // Put the original bytes back before changing the stored patch definition.
+            program.getMemory().setBytes(patch.address, patch.originalBytes);
+            bytesRestored = true;
+
+            patch.name = replacement.name;
+            patch.patchedBytes = replacement.patchedBytes;
+
+            if (enabledAfter) {
+                program.getMemory().setBytes(patch.address, patch.patchedBytes);
+            }
+            committed = true;
+        }
+        catch (Exception e) {
+            patch.name = oldName;
+            patch.patchedBytes = oldPatchedBytes;
+            if (bytesRestored) {
+                try {
+                    program.getMemory().setBytes(patch.address, oldPatchedBytes);
+                }
+                catch (Exception restoreError) {
+                    Msg.error(this, "Unable to restore the original patched bytes after edit failure", restoreError);
+                }
+            }
+            showError("Unable to edit enabled patch '" + patch.name + "': " + e.getMessage(), "Edit Patch");
+        }
+        finally {
+            program.endTransaction(tx, committed);
+            internalChange = false;
+        }
+
+        if (!committed) {
+            busy = false;
+            refreshProvider();
+            provider.selectPatch(patch);
+            return;
+        }
+
+        try {
+            saveToProgram();
+        }
+        catch (RuntimeException e) {
+            Msg.error(this, "Unable to persist edited patch state", e);
+        }
+        refreshProvider();
+        provider.selectPatch(patch);
+
+        if (reassemblyRange == null) {
+            busy = false;
+            provider.setStatus((enabledAfter ? "Updated and enabled " : "Updated and disabled ")
+                    + "patch '" + patch.name + "'.");
+            return;
+        }
+
+        Program programAtSchedule = program;
+        tool.executeBackgroundCommand(new BackgroundCommand<Program>(
+                "Re-disassemble edited Ghidra patch", true, false, false) {
+            @Override
+            public boolean applyTo(Program program, TaskMonitor monitor) {
+                boolean success = true;
+                try {
+                    if (monitor.isCancelled()) {
+                        return false;
+                    }
+                    DisassembleCommand command = new DisassembleCommand(
+                            reassemblyRange.start(),
+                            new AddressSet(reassemblyRange.start(), reassemblyRange.end()), true);
+                    command.enableCodeAnalysis(true);
+                    success = command.applyTo(program, monitor);
+                    return success;
+                }
+                catch (RuntimeException e) {
+                    success = false;
+                    Msg.error(PatchManagerPlugin.this,
+                            "Automatic patch re-disassembly after edit failed", e);
+                    return false;
+                }
+                finally {
+                    boolean finalSuccess = success;
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            finishPatchEditReassembly(programAtSchedule, enabledAfter, finalSuccess));
+                }
+            }
+        }, programAtSchedule);
+    }
+
+    private void finishPatchEditReassembly(Program program, boolean enabled, boolean success) {
+        busy = false;
+        if (activeProgram != program) {
+            refreshProvider();
+            return;
+        }
+        refreshProvider();
+        if (success) {
+            Patch selected = provider.getSelectedPatch();
+            String name = selected == null ? "" : " '" + selected.name + "'";
+            provider.setStatus((enabled ? "Updated and enabled patch" : "Updated and disabled patch")
+                    + name + ".");
+        }
+        else {
+            provider.setStatus("Patch edit applied, but automatic re-disassembly did not complete.");
         }
     }
 
@@ -765,7 +933,6 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                                 new AddressSet(range.start(), range.end()), true);
                         command.enableCodeAnalysis(true);
                         if (!command.applyTo(program, monitor)) {
-                            success = false;
                             success = false;
                         }
                     }
