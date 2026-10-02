@@ -15,6 +15,9 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - Patch Info byte fields can be viewed as hexadecimal, Base64, ASCII, UTF-8, UTF-16LE/BE, Windows-1252, ISO-8859-1, or any charset exposed by the Java runtime.
 - **Capture Existing...** imports a change you already made with Ghidra's normal byte/instruction patch UI by comparing current bytes against Ghidra's imported original bytes.
 - Automatically clears affected code units and invokes Ghidra's normal `DisassembleCommand` after byte changes, eliminating the manual undefine/re-disassemble workflow.
+- **Patch highlighting:** managed patch instructions are highlighted in the CodeBrowser with state-specific colors. Enabled patches use brownish-orange; disabled patches use purplish-lavender. The colors automatically switch between darker variants for dark themes and lighter variants for light themes. Highlighting is enabled by default and can be disabled with **Edit -> Tool Options -> Ghidra Patch Manager -> Highlight Patch Locations**.
+- Patch highlighting is **address/instruction based**, not UI-line based. After a patch is toggled and re-disassembled, the current instruction containing the patch bytes is resolved again. All managed patches are re-resolved when any patch changes so instruction-boundary shifts do not leave stale highlighting behind.
+- The same state-colored patch ranges are registered with Ghidra's `MarkerService`, which also makes their locations available in marker-capable connected views such as the Bytes viewer. Ghidra 12.1.x does not expose the CodeBrowser's marker-backed background model for individual byte cells, so this does not replace the Bytes viewer's own cell renderer.
 - Patch state is persisted inside the Ghidra program database.
 - Export/import patch sets as simple Java-Properties text files suitable for version control.
 - Conflict detection: a patch is only toggled when the current bytes exactly match either its stored original or patched bytes.
@@ -82,7 +85,16 @@ The plugin intentionally does not silently overwrite a location whose current by
 
 ## Notes
 
-This is source-complete and should be built against the exact Ghidra version you intend to use. The build environment available while this project was generated did not contain a local Ghidra installation, so the final Ghidra extension zip could not be compiled here.
+The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 21**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
+
+## 1.2.0 Changes
+
+- Added optional state-colored patch highlighting in the CodeBrowser.
+- Enabled patches use brownish-orange; disabled patches use purplish-lavender.
+- Colors automatically adapt for Ghidra light/dark themes.
+- Highlight ranges are recalculated after re-disassembly and refreshed for all managed patches after a toggle.
+- Added the **Highlight Patch Locations** Tool Option, enabled by default.
+- Added state-colored MarkerService ranges for connected marker-capable views such as the Bytes viewer.
 
 ## 1.1.0 Changes
 

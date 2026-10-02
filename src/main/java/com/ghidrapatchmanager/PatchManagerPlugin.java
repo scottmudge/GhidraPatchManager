@@ -73,6 +73,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private List<Patch> patches = new ArrayList<>();
     private boolean busy;
     private boolean internalChange;
+    private PatchHighlightManager highlightManager;
 
     public PatchManagerPlugin(PluginTool tool) {
         super(tool);
@@ -82,6 +83,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     protected void init() {
         super.init();
         provider = new PatchManagerProvider(tool, this);
+        highlightManager = new PatchHighlightManager(this, tool);
         tool.addComponentProvider(provider, false);
         patchInfoDialog = new PatchInfoDialog(this);
 
@@ -202,6 +204,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (activeProgram != null) {
             activeProgram.removeListener(this);
         }
+        if (highlightManager != null) {
+            highlightManager.dispose();
+            highlightManager = null;
+        }
         for (DockingAction action : registeredActions) {
             tool.removeAction(action);
         }
@@ -223,12 +229,18 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         activeProgram = program;
         program.addListener(this);
         loadFromProgram(program);
+        if (highlightManager != null) {
+            highlightManager.programActivated(program);
+        }
         refreshProvider();
         clearPatchInfoOnProgramSwitch();
     }
 
     @Override
     protected void programDeactivated(Program program) {
+        if (highlightManager != null) {
+            highlightManager.programDeactivated(program);
+        }
         if (program != null) {
             program.removeListener(this);
         }
@@ -965,6 +977,9 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return;
         }
         provider.setPatches(patches);
+        if (highlightManager != null) {
+            highlightManager.refresh();
+        }
         provider.setStatus(patches.size() + " patch" + (patches.size() == 1 ? "" : "es")
                 + " in " + activeProgram.getName());
         if (patchInfoDialog != null && patchInfoDialog.isVisible()) {
@@ -1250,6 +1265,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
 
     private void showError(String message, String title) {
         JOptionPane.showMessageDialog(provider.getComponent(), message, title, JOptionPane.ERROR_MESSAGE);
+    }
+
+    List<Patch> getPatchesSnapshot() {
+        return new ArrayList<>(patches);
     }
 
     void refreshProviderFromProgramChange() {
