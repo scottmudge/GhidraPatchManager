@@ -2,6 +2,8 @@
 
 A Ghidra 12.x extension for managing fixed-length byte patches as first-class, toggleable patch records.
 
+<img width="779" height="353" alt="image" src="https://github.com/user-attachments/assets/8bad4c06-7832-4b98-97e7-8da505a80a8e" />
+
 ## Features
 
 - Dockable **Patch Manager** window.
