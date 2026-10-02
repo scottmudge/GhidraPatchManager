@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'com.ghidrapatchmanager'
-version = '1.0.2'
+version = '1.0.3'
 
 java {
     toolchain {
@@ -22,6 +22,19 @@ def ghidraInstallDir = providers.gradleProperty('GHIDRA_INSTALL_DIR')
 
 if (ghidraInstallDir) {
     apply from: "${ghidraInstallDir}/support/buildExtension.gradle"
+
+    tasks.named("buildExtension") {
+        exclude "build.ps1"
+        exclude "build.sh"
+        exclude "build_custom.sh"
+        exclude "CHANGELOG.md"
+        exclude "gradle.properties"
+        exclude "settings.gradle"
+        exclude ".gitignore"
+
+        // Ghidra's buildExtension task normally bundles the source ZIP.
+        exclude "**/*-src*.zip"
+    }
 } else {
     tasks.register('buildExtension') {
         group = 'ghidra'

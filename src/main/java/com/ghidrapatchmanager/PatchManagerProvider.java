@@ -2,23 +2,35 @@ package com.ghidrapatchmanager;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.KeyEvent;
+import java.util.ArrayList;
 import java.util.List;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.JButton;
+import javax.swing.Icon;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.ListSelectionModel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import javax.swing.table.TableColumnModel;
+import javax.swing.event.TableColumnModelEvent;
+import javax.swing.event.TableColumnModelListener;
+
+import generic.theme.GIcon;
+import resources.Icons;
+import resources.ResourceManager;
 
 import ghidra.framework.plugintool.ComponentProviderAdapter;
 import ghidra.framework.plugintool.PluginTool;
@@ -26,33 +38,130 @@ import ghidra.framework.plugintool.PluginTool;
 final class PatchManagerProvider extends ComponentProviderAdapter {
     static final String TITLE = "Patch Manager";
 
+    private static final int ICON_SIZE = 16;
+    private static final int BUTTON_GAP = 4;
+
+    private static final int ENABLED_WIDTH = 64;
+    private static final int ADDRESS_WIDTH = 120;
+    private static final int STATE_WIDTH = 90;
+    private static final int FLEXIBLE_MIN_WIDTH = 90;
+
     private final PatchManagerPlugin plugin;
     private final JPanel mainPanel = new JPanel(new BorderLayout(6, 6));
     private final PatchTableModel model;
     private final JTable table;
+    private final JScrollPane scrollPane;
     private final JLabel statusLabel = new JLabel("No program");
+
+    private final JButton addButton = new JButton("Add Patch...");
     private final JButton editButton = new JButton("Edit...");
     private final JButton toggleButton = new JButton("Toggle");
     private final JButton deleteButton = new JButton("Delete");
     private final JButton captureButton = new JButton("Capture Existing...");
+    private final JButton enableAllButton = new JButton("Enable All");
+    private final JButton disableAllButton = new JButton("Disable All");
+    private final JButton saveButton = new JButton("Save Patch Set...");
+    private final JButton loadButton = new JButton("Load Patch Set...");
+    private final JButton refreshButton = new JButton("Refresh");
+
+    private final JPanel buttonBar = new JPanel(new BorderLayout());
+    private final JPanel buttonStrip = new JPanel();
+    private final JButton overflowButton = new JButton("\u22ee");
+    private final List<JButton> actionButtons = List.of(
+        addButton, captureButton, editButton, toggleButton, deleteButton,
+        enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
+    );
+    private List<JButton> visibleButtons = new ArrayList<>();
+    private boolean updatingOverflow;
+
+    private boolean layingOutColumns;
+    private boolean userResizedColumns;
 
     PatchManagerProvider(PluginTool tool, PatchManagerPlugin plugin) {
         super(tool, TITLE, plugin.getName());
         this.plugin = plugin;
         this.model = new PatchTableModel(plugin);
         this.table = new JTable(model);
+        this.scrollPane = new JScrollPane(table);
 
         buildUi();
     }
 
+    private static Icon sizedIcon(Icon icon) {
+        // Ghidra-aware scaling (handles GIcon / theme-aware icons)
+        return ResourceManager.getScaledIcon(icon, ICON_SIZE, ICON_SIZE);
+    }
+
+    private static void equalizeHeights(JButton... buttons) {
+        int maxHeight = 0;
+        for (JButton b : buttons) {
+            maxHeight = Math.max(maxHeight, b.getPreferredSize().height);
+        }
+        for (JButton b : buttons) {
+            Dimension d = b.getPreferredSize();
+            b.setPreferredSize(new Dimension(d.width, maxHeight));
+        }
+    }
+
     private void buildUi() {
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEADING, 4, 2));
-        JButton addButton = new JButton("Add Patch...");
-        JButton enableAllButton = new JButton("Enable All");
-        JButton disableAllButton = new JButton("Disable All");
-        JButton saveButton = new JButton("Save Patch Set...");
-        JButton loadButton = new JButton("Load Patch Set...");
-        JButton refreshButton = new JButton("Refresh");
+        configureButtons();
+        configureButtonBar();
+        configureTable();
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        mainPanel.add(buttonBar, BorderLayout.NORTH);
+        mainPanel.add(scrollPane, BorderLayout.CENTER);
+        mainPanel.add(statusLabelPanel(), BorderLayout.SOUTH);
+
+        SwingUtilities.invokeLater(this::relayoutColumns);
+        SwingUtilities.invokeLater(this::updateButtonOverflow);
+        updateButtons();
+    }
+
+    private void configureButtons() {
+        addButton.setIcon(sizedIcon(Icons.ADD_ICON));
+        addButton.setIconTextGap(4);
+        addButton.setToolTipText("Create a new patch");
+
+        captureButton.setIcon(sizedIcon(Icons.COPY_ICON));
+        captureButton.setIconTextGap(4);
+        captureButton.setToolTipText("Capture existing modifications in the current program");
+
+        editButton.setIcon(sizedIcon(new GIcon("icon.properties")));
+        editButton.setIconTextGap(4);
+        editButton.setToolTipText("Edit the selected patch");
+
+        toggleButton.setIcon(sizedIcon(new GIcon("icon.run")));
+        toggleButton.setIconTextGap(4);
+        toggleButton.setToolTipText("Toggle the selected patch between enabled and disabled");
+
+        deleteButton.setIcon(sizedIcon(Icons.DELETE_ICON));
+        deleteButton.setIconTextGap(4);
+        deleteButton.setToolTipText("Delete the selected patch");
+
+        enableAllButton.setIcon(sizedIcon(new GIcon("icon.plugin.bundlemanager.enable")));
+        enableAllButton.setIconTextGap(4);
+        enableAllButton.setToolTipText("Enable all patches");
+
+        disableAllButton.setIcon(sizedIcon(new GIcon("icon.plugin.bundlemanager.disable")));
+        disableAllButton.setIconTextGap(4);
+        disableAllButton.setToolTipText("Disable all patches");
+
+        saveButton.setIcon(sizedIcon(Icons.SAVE_AS_ICON));
+        saveButton.setIconTextGap(4);
+        saveButton.setToolTipText("Save the patch set to a file");
+
+        loadButton.setIcon(sizedIcon(Icons.OPEN_FOLDER_ICON));
+        loadButton.setIconTextGap(4);
+        loadButton.setToolTipText("Load a patch set from a file");
+
+        refreshButton.setIcon(sizedIcon(Icons.REFRESH_ICON));
+        refreshButton.setIconTextGap(4);
+        refreshButton.setToolTipText("Refresh patch states from the current program");
+
+        equalizeHeights(
+            addButton, captureButton, editButton, toggleButton, deleteButton,
+            enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
+        );
 
         addButton.addActionListener(e -> plugin.addPatchFromUi());
         captureButton.addActionListener(e -> plugin.captureCurrentChanges());
@@ -65,24 +174,127 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         loadButton.addActionListener(e -> plugin.importPatchSet());
         refreshButton.addActionListener(e -> plugin.refreshProvider());
 
-        buttons.add(addButton);
-        buttons.add(captureButton);
-        buttons.add(editButton);
-        buttons.add(toggleButton);
-        buttons.add(deleteButton);
-        buttons.add(enableAllButton);
-        buttons.add(disableAllButton);
-        buttons.add(saveButton);
-        buttons.add(loadButton);
-        buttons.add(refreshButton);
+        overflowButton.setFocusable(false);
+        overflowButton.setToolTipText("More Patch Manager actions");
+        overflowButton.setMargin(new java.awt.Insets(2, 7, 2, 7));
+        overflowButton.addActionListener(e -> showOverflowMenu());
+    }
 
+    private void configureButtonBar() {
+        buttonStrip.setLayout(new javax.swing.BoxLayout(buttonStrip, javax.swing.BoxLayout.X_AXIS));
+        buttonStrip.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, BUTTON_GAP));
+        buttonBar.add(buttonStrip, BorderLayout.CENTER);
+        buttonBar.add(overflowButton, BorderLayout.EAST);
+        overflowButton.setVisible(false);
+
+        buttonBar.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                SwingUtilities.invokeLater(PatchManagerProvider.this::updateButtonOverflow);
+            }
+        });
+    }
+
+    private void updateButtonOverflow() {
+        if (updatingOverflow) {
+            return;
+        }
+
+        int availableWidth = buttonBar.getWidth();
+        if (availableWidth <= 0) {
+            return;
+        }
+
+        updatingOverflow = true;
+        try {
+            int totalWidth = totalButtonWidth(actionButtons);
+            boolean needOverflow = totalWidth > availableWidth;
+            int budget = needOverflow
+                ? Math.max(0, availableWidth - overflowButton.getPreferredSize().width - BUTTON_GAP)
+                : availableWidth;
+
+            List<JButton> nextVisible = new ArrayList<>();
+            int used = 0;
+            for (JButton button : actionButtons) {
+                int width = button.getPreferredSize().width;
+                int candidate = nextVisible.isEmpty() ? width : used + BUTTON_GAP + width;
+                if (candidate > budget) {
+                    break;
+                }
+                nextVisible.add(button);
+                used = candidate;
+            }
+
+            // If everything actually fits, don't reserve space for the overflow button.
+            if (nextVisible.size() == actionButtons.size()) {
+                needOverflow = false;
+            }
+
+            if (!nextVisible.equals(visibleButtons)) {
+                visibleButtons = nextVisible;
+                buttonStrip.removeAll();
+                for (int i = 0; i < visibleButtons.size(); i++) {
+                    if (i != 0) {
+                        buttonStrip.add(Box.createHorizontalStrut(BUTTON_GAP));
+                    }
+                    buttonStrip.add(visibleButtons.get(i));
+                }
+                buttonStrip.revalidate();
+                buttonStrip.repaint();
+            }
+
+            overflowButton.setVisible(needOverflow && visibleButtons.size() < actionButtons.size());
+            buttonBar.revalidate();
+            buttonBar.repaint();
+        }
+        finally {
+            updatingOverflow = false;
+        }
+    }
+
+    private static int totalButtonWidth(List<JButton> buttons) {
+        int total = 0;
+        for (int i = 0; i < buttons.size(); i++) {
+            if (i != 0) {
+                total += BUTTON_GAP;
+            }
+            total += buttons.get(i).getPreferredSize().width;
+        }
+        return total;
+    }
+
+    private void showOverflowMenu() {
+        if (visibleButtons.size() == actionButtons.size()) {
+            return;
+        }
+
+        JPopupMenu menu = new JPopupMenu();
+        for (JButton button : actionButtons) {
+            if (visibleButtons.contains(button)) {
+                continue;
+            }
+
+            JMenuItem item = new JMenuItem(button.getText(), button.getIcon());
+            item.setEnabled(button.isEnabled());
+            if (button.getToolTipText() != null) {
+                item.setToolTipText(button.getToolTipText());
+            }
+            item.addActionListener(e -> button.doClick());
+            menu.add(item);
+        }
+
+        menu.show(overflowButton, 0, overflowButton.getHeight());
+    }
+
+    private void configureTable() {
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.setAutoCreateRowSorter(true);
         table.setFillsViewportHeight(true);
         table.setRowHeight(Math.max(22, table.getRowHeight()));
         table.setShowGrid(true);
         table.setIntercellSpacing(new Dimension(1, 1));
-        table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
+        table.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+
         table.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "toggle-patch");
         table.getActionMap().put("toggle-patch", new javax.swing.AbstractAction() {
             @Override
@@ -90,15 +302,6 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
                 plugin.toggleSelectedPatch();
             }
         });
-
-        TableColumnModel columns = table.getColumnModel();
-        columns.getColumn(PatchTableModel.ENABLED_COL).setPreferredWidth(58);
-        columns.getColumn(PatchTableModel.ENABLED_COL).setMaxWidth(70);
-        columns.getColumn(PatchTableModel.ADDRESS_COL).setPreferredWidth(120);
-        columns.getColumn(PatchTableModel.ORIGINAL_COL).setPreferredWidth(190);
-        columns.getColumn(PatchTableModel.PATCHED_COL).setPreferredWidth(190);
-        columns.getColumn(PatchTableModel.STATE_COL).setPreferredWidth(85);
-        columns.getColumn(PatchTableModel.STATE_COL).setMaxWidth(100);
 
         table.addMouseListener(new MouseAdapter() {
             @Override
@@ -140,15 +343,100 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
             }
         });
 
+        table.getColumnModel().addColumnModelListener(new TableColumnModelListener() {
+            @Override
+            public void columnAdded(TableColumnModelEvent e) {
+            }
+
+            @Override
+            public void columnRemoved(TableColumnModelEvent e) {
+            }
+
+            @Override
+            public void columnMoved(TableColumnModelEvent e) {
+                if (!layingOutColumns) {
+                    userResizedColumns = true;
+                }
+            }
+
+            @Override
+            public void columnMarginChanged(javax.swing.event.ChangeEvent e) {
+                if (!layingOutColumns) {
+                    userResizedColumns = true;
+                }
+            }
+
+            @Override
+            public void columnSelectionChanged(javax.swing.event.ListSelectionEvent e) {
+            }
+        });
+
+        scrollPane.getViewport().addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                if (!userResizedColumns) {
+                    SwingUtilities.invokeLater(PatchManagerProvider.this::relayoutColumns);
+                }
+            }
+        });
+    }
+
+    private void relayoutColumns() {
+        if (userResizedColumns || layingOutColumns) {
+            return;
+        }
+
+        int viewportWidth = scrollPane.getViewport().getWidth();
+        if (viewportWidth <= 0) {
+            return;
+        }
+
+        TableColumnModel columns = table.getColumnModel();
+        int fixedWidth = ENABLED_WIDTH + ADDRESS_WIDTH + STATE_WIDTH;
+        int flexibleWidth = viewportWidth - fixedWidth;
+        int eachFlexible = Math.max(FLEXIBLE_MIN_WIDTH, flexibleWidth / 3);
+
+        layingOutColumns = true;
+        try {
+            setColumnWidth(columns, PatchTableModel.ENABLED_COL, ENABLED_WIDTH);
+            setColumnWidth(columns, PatchTableModel.ADDRESS_COL, ADDRESS_WIDTH);
+            setColumnWidth(columns, PatchTableModel.STATE_COL, STATE_WIDTH);
+            setColumnWidth(columns, PatchTableModel.NAME_COL, eachFlexible);
+            setColumnWidth(columns, PatchTableModel.ORIGINAL_COL, eachFlexible);
+            setColumnWidth(columns, PatchTableModel.PATCHED_COL,
+                Math.max(FLEXIBLE_MIN_WIDTH, flexibleWidth - eachFlexible * 2));
+            table.revalidate();
+            table.repaint();
+        }
+        finally {
+            layingOutColumns = false;
+        }
+    }
+
+    private static void setColumnWidth(TableColumnModel columns, int modelIndex, int width) {
+        var column = findColumnByModelIndex(columns, modelIndex);
+        if (column != null) {
+            column.setPreferredWidth(width);
+            column.setWidth(width);
+        }
+    }
+
+    private static javax.swing.table.TableColumn findColumnByModelIndex(TableColumnModel columns,
+            int modelIndex) {
+        for (int i = 0; i < columns.getColumnCount(); i++) {
+            javax.swing.table.TableColumn column = columns.getColumn(i);
+            if (column.getModelIndex() == modelIndex) {
+                return column;
+            }
+        }
+        return null;
+    }
+
+    private JPanel statusLabelPanel() {
         JPanel bottom = new JPanel(new BorderLayout());
         bottom.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
         bottom.add(statusLabel, BorderLayout.WEST);
-
-        mainPanel.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
-        mainPanel.add(buttons, BorderLayout.NORTH);
-        mainPanel.add(new JScrollPane(table), BorderLayout.CENTER);
-        mainPanel.add(bottom, BorderLayout.SOUTH);
-        updateButtons();
+        return bottom;
     }
 
     @Override
@@ -215,5 +503,4 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         toggleButton.setEnabled(one && !busy && plugin.selectedPatchIsEditable());
         deleteButton.setEnabled(hasSelection && !busy);
     }
-
 }

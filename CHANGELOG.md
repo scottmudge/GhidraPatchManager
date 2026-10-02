@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+- Optimize build to exclude unneeded files
+- Add icons to buttons
+
 ## 1.0.2
 
 - Fixed Enabled-column checkbox toggling by removing JTable's live Boolean cell editor path.

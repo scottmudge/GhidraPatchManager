@@ -57,6 +57,10 @@ The plugin intentionally does not silently overwrite a location whose current by
 This is source-complete but should be built against the exact Ghidra version you intend to use. The build environment available while this project was generated did not contain a local Ghidra installation, so the final Ghidra extension zip could not be compiled here.
 
 
+## 1.0.3 Changes
+- Optimize build to exclude unneeded files
+- Add icons to buttons
+
 ## 1.0.2 changes
 
 - Enabled-column checkboxes are now handled as explicit mouse toggle targets instead of JTable Boolean cell editors.
