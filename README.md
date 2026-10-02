@@ -11,12 +11,38 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - The manager stores the original bytes and replacement bytes.
 - Enable/disable patches with a checkbox, button, Space, or **Enable All / Disable All**.
 - Double-click a patch to jump to its address in the Listing.
+- **Patch Info** opens a read-only, copy-friendly detail window containing the patch name/state, address and end address, RVA, file offset(s), length, address space, image base, source file, memory block, and current bytes.
+- Patch Info byte fields can be viewed as hexadecimal, Base64, ASCII, UTF-8, UTF-16LE/BE, Windows-1252, ISO-8859-1, or any charset exposed by the Java runtime.
 - **Capture Existing...** imports a change you already made with Ghidra's normal byte/instruction patch UI by comparing current bytes against Ghidra's imported original bytes.
 - Automatically clears affected code units and invokes Ghidra's normal `DisassembleCommand` after byte changes, eliminating the manual undefine/re-disassemble workflow.
 - Patch state is persisted inside the Ghidra program database.
 - Export/import patch sets as simple Java-Properties text files suitable for version control.
 - Conflict detection: a patch is only toggled when the current bytes exactly match either its stored original or patched bytes.
 - Fixed-length, non-overlapping patches keep toggling deterministic.
+
+## Hotkeys
+
+Actions are registered as normal Ghidra Docking actions, so their default keybindings appear in Ghidra's **Edit -> Tool Options -> Key Bindings** and can be changed there. The defaults use `Ctrl+Alt+Shift` to reduce collisions with ordinary CodeBrowser navigation and editing shortcuts.
+
+| Action | Default | Scope |
+|---|---|---|
+| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P` | Global |
+| Patch Manager: Add Patch | `Ctrl+Alt+Shift + A` | CodeBrowser/program location |
+| Patch Manager: Capture Existing Patch | `Ctrl+Alt+Shift + C` | CodeBrowser/program location |
+| Patch Manager: Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when a managed patch contains the current location |
+| Patch Manager: Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when a managed patch contains the current location |
+| Patch Manager: Edit Patch | `Ctrl+Alt+Shift + E` | Patch Manager selection |
+| Patch Manager: Delete Patch | `Ctrl+Alt+Shift + D` | Patch Manager selection |
+| Patch Manager: Enable All Patches | `Ctrl+Alt+Shift + Y` | Patch Manager |
+| Patch Manager: Disable All Patches | `Ctrl+Alt+Shift + N` | Patch Manager |
+| Patch Manager: Patch Info | `Ctrl+Alt+Shift + U` | Patch Manager selection |
+| Patch Manager: Save Patch Set | `Ctrl+Alt+Shift + S` | Patch Manager |
+| Patch Manager: Load Patch Set | `Ctrl+Alt+Shift + L` | Patch Manager |
+| Patch Manager: Refresh Patch Manager | `Ctrl+Alt+Shift + R` | Patch Manager |
+
+The **Toggle Patch At Location** and **Patch Info At Location** actions deliberately do nothing when the current CodeBrowser location is not inside a managed patch. This includes patches where the cursor is in the middle of the patch, not only exactly at its start address.
+
+The manager's **Edit Patch**, **Delete Patch**, **Enable All**, **Disable All**, and **Patch Info** actions are context-sensitive because they operate on the Patch Manager provider rather than arbitrary CodeBrowser locations. Ghidra's Key Bindings configuration can be used to assign different combinations when desired.
 
 ## Building
 
@@ -56,8 +82,14 @@ The plugin intentionally does not silently overwrite a location whose current by
 
 ## Notes
 
-This is source-complete but should be built against the exact Ghidra version you intend to use. The build environment available while this project was generated did not contain a local Ghidra installation, so the final Ghidra extension zip could not be compiled here.
+This is source-complete and should be built against the exact Ghidra version you intend to use. The build environment available while this project was generated did not contain a local Ghidra installation, so the final Ghidra extension zip could not be compiled here.
 
+## 1.1.0 Changes
+
+- Added the **Patch Info** read-only dialog with individually selectable/copyable fields for address, RVA, file offsets, source file, memory block, byte lengths, and other patch metadata.
+- Added selectable byte rendering for hexadecimal, Base64, ASCII, UTF-8, UTF-16, and the Java runtime's available character sets.
+- Added Ghidra DockingAction keybindings for Patch Manager operations.
+- Added context-aware CodeBrowser hotkeys for Add, Capture Existing, Toggle-at-location, and Patch Info-at-location.
 
 ## 1.0.3 Changes
 - Optimize build to exclude unneeded files

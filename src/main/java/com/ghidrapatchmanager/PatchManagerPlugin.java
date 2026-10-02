@@ -18,17 +18,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 
-import docking.action.DockingAction;
-import docking.action.MenuData;
-import ghidra.framework.plugintool.ComponentProviderAdapter;
 import docking.ActionContext;
+import docking.action.DockingAction;
+import docking.action.KeyBindingData;
+import docking.action.MenuData;
 import ghidra.app.CorePluginPackage;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
+import ghidra.app.context.ProgramLocationSupplierContext;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
+import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.model.DomainObjectChangedEvent;
 import ghidra.framework.model.DomainObjectListener;
-import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.options.Options;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
@@ -38,15 +39,14 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Instruction;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.HelpLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
-import ghidra.program.model.mem.MemoryAccessException;
-import ghidra.util.exception.CancelledException;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -60,14 +60,19 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private static final String OPTION_DATA = "Patch Set";
     private static final String FORMAT = "GhidraPatchManager";
     private static final int FORMAT_VERSION = 1;
+    private static final int HOTKEY_MODIFIERS = java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.ALT_DOWN_MASK;
+    private static final int HOTKEY_SHIFT_MODIFIERS = HOTKEY_MODIFIERS | java.awt.event.InputEvent.SHIFT_DOWN_MASK;
+
+    private final AtomicBoolean refreshPending = new AtomicBoolean();
+    private final List<DockingAction> registeredActions = new ArrayList<>();
 
     private PatchManagerProvider provider;
     private DockingAction showAction;
+    private PatchInfoDialog patchInfoDialog;
     private Program activeProgram;
     private List<Patch> patches = new ArrayList<>();
     private boolean busy;
     private boolean internalChange;
-    private final AtomicBoolean refreshPending = new AtomicBoolean();
 
     public PatchManagerPlugin(PluginTool tool) {
         super(tool);
@@ -78,27 +83,132 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         super.init();
         provider = new PatchManagerProvider(tool, this);
         tool.addComponentProvider(provider, false);
+        patchInfoDialog = new PatchInfoDialog(this);
 
-        showAction = new DockingAction("Show Patch Manager", getName()) {
+        showAction = new DockingAction("Patch Manager: Show Patch Manager", getName()) {
             @Override
             public void actionPerformed(ActionContext context) {
-                provider.setVisible(true);
-                tool.toFront(provider);
-                provider.getComponent().requestFocusInWindow();
+                showPatchManager();
             }
         };
         showAction.setPopupMenuData(new MenuData(new String[] { "Window", "Patch Manager" }));
         showAction.setDescription("Open the Patch Manager window");
+        showAction.setKeyBindingData(new KeyBindingData(java.awt.event.KeyEvent.VK_P, HOTKEY_SHIFT_MODIFIERS));
         tool.addAction(showAction);
+        registeredActions.add(showAction);
+
+        registerGlobalAction("Patch Manager: Add Patch", "Create a patch at the current CodeBrowser location",
+                java.awt.event.KeyEvent.VK_A, context -> addPatchFromUi(), true,
+                this::hasUsableProgramLocation);
+        registerGlobalAction("Patch Manager: Capture Existing Patch", "Capture existing modified bytes at the current CodeBrowser location",
+                java.awt.event.KeyEvent.VK_C, context -> captureCurrentChanges(),  true,
+                this::hasUsableProgramLocation);
+        registerGlobalAction("Patch Manager: Toggle Patch At Location", "Toggle the managed patch containing the current CodeBrowser location",
+                java.awt.event.KeyEvent.VK_T, context -> togglePatchForContext(context),  true,
+                context -> patchForContext(context) != null && canEditPatches() &&
+                    isToggleState(patchForContext(context).getState(this)));
+        registerGlobalAction("Patch Manager: Patch Info At Location", "Show Patch Info for the managed patch containing the current CodeBrowser location",
+                java.awt.event.KeyEvent.VK_I, context -> showPatchInfo(patchForContext(context)),  true,
+                context -> patchForContext(context) != null && activeProgram != null);
+
+        registerManagerAction("Patch Manager: Edit Patch", "Edit the selected patch",
+                java.awt.event.KeyEvent.VK_E, this::editSelectedPatch, true,
+                () -> provider.getSelectedPatch() != null && selectedPatchIsEditable());
+        registerManagerAction("Patch Manager: Delete Patch", "Delete the selected patch or patches",
+                java.awt.event.KeyEvent.VK_D, this::deleteSelectedPatches, true,
+                () -> provider.getSelectedModelRows().length > 0 && canEditPatches());
+        registerManagerAction("Patch Manager: Enable All Patches", "Enable all managed patches",
+                java.awt.event.KeyEvent.VK_Y, this::enableAllWithHotkey, true,
+                () -> canEditPatches());
+        registerManagerAction("Patch Manager: Disable All Patches", "Disable all managed patches",
+                java.awt.event.KeyEvent.VK_N, this::disableAllWithHotkey, true,
+                () -> canEditPatches());
+        registerManagerAction("Patch Manager: Save Patch Set", "Save the managed patch set to a file",
+                java.awt.event.KeyEvent.VK_S, this::exportPatchSet, true,
+                () -> activeProgram != null);
+        registerManagerAction("Patch Manager: Load Patch Set", "Load a managed patch set from a file",
+                java.awt.event.KeyEvent.VK_L, this::importPatchSet, true,
+                () -> canEditPatches());
+        registerManagerAction("Patch Manager: Refresh Patch Manager", "Refresh patch states from the current program",
+                java.awt.event.KeyEvent.VK_R, this::refreshProvider, true,
+                () -> activeProgram != null);
+        registerManagerAction("Patch Manager: Patch Info", "Show details for the selected patch",
+                java.awt.event.KeyEvent.VK_U, this::showPatchInfoForSelectedPatch, true,
+                () -> provider.getSelectedPatch() != null && activeProgram != null);
 
         provider.getComponent().setName("Ghidra Patch Manager");
         provider.setHelpLocation(new HelpLocation(getName(), "Patch_Manager"));
+    }
+
+    private void registerGlobalAction(String name, String description, int keyCode,
+            java.util.function.Consumer<ActionContext> performer, boolean shifted,
+            java.util.function.Predicate<ActionContext> enabled) {
+        DockingAction action = new DockingAction(name, getName()) {
+            @Override
+            public void actionPerformed(ActionContext context) {
+                performer.accept(context);
+            }
+
+            @Override
+            public boolean isEnabledForContext(ActionContext context) {
+                return enabled.test(context);
+            }
+        };
+        action.setDescription(description);
+        action.setKeyBindingData(new KeyBindingData(keyCode, shifted ? HOTKEY_SHIFT_MODIFIERS : HOTKEY_MODIFIERS));
+        tool.addAction(action);
+        registeredActions.add(action);
+    }
+
+    private void registerManagerAction(String name, String description, int keyCode,
+            Runnable performer, boolean shifted, java.util.function.BooleanSupplier enabled) {
+        DockingAction action = new DockingAction(name, getName()) {
+            @Override
+            public void actionPerformed(ActionContext context) {
+                performer.run();
+            }
+
+            @Override
+            public boolean isEnabledForContext(ActionContext context) {
+                return context != null && context.getComponentProvider() == provider && enabled.getAsBoolean();
+            }
+        };
+        action.setDescription(description);
+        action.setKeyBindingData(new KeyBindingData(keyCode, shifted ? HOTKEY_SHIFT_MODIFIERS : HOTKEY_MODIFIERS));
+        tool.addAction(action);
+        registeredActions.add(action);
+    }
+
+    void notifyContextChanged() {
+        tool.contextChanged(provider);
+    }
+
+    private void showPatchManager() {
+        provider.setVisible(true);
+        tool.toFront(provider);
+        provider.getComponent().requestFocusInWindow();
+    }
+
+    private void enableAllWithHotkey() {
+        setAllPatchesEnabled(true);
+    }
+
+    private void disableAllWithHotkey() {
+        setAllPatchesEnabled(false);
     }
 
     @Override
     protected void dispose() {
         if (activeProgram != null) {
             activeProgram.removeListener(this);
+        }
+        for (DockingAction action : registeredActions) {
+            tool.removeAction(action);
+        }
+        registeredActions.clear();
+        if (patchInfoDialog != null) {
+            patchInfoDialog.close();
+            patchInfoDialog = null;
         }
         if (provider != null) {
             tool.removeComponentProvider(provider);
@@ -114,6 +224,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         program.addListener(this);
         loadFromProgram(program);
         refreshProvider();
+        clearPatchInfoOnProgramSwitch();
     }
 
     @Override
@@ -124,6 +235,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (activeProgram == program) {
             activeProgram = null;
         }
+        clearPatchInfoOnProgramSwitch();
         super.programDeactivated(program);
         refreshProvider();
     }
@@ -133,6 +245,13 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         super.locationChanged(location);
         if (provider != null && provider.isVisible() && activeProgram != null && provider.getSelectedPatch() == null) {
             provider.setStatus("Current address: " + location);
+        }
+        tool.contextChanged(null);
+    }
+
+    private void clearPatchInfoOnProgramSwitch() {
+        if (patchInfoDialog != null) {
+            patchInfoDialog.clearPatch();
         }
     }
 
@@ -168,13 +287,91 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         return activeProgram != null ? activeProgram.getImageBase() : null;
     }
 
+    private boolean hasUsableProgramLocation(ActionContext context) {
+        if (context instanceof ProgramLocationSupplierContext locationContext && locationContext.getLocation() != null) {
+            return canEditPatches() && locationContext.getLocation().getByteAddress() != null;
+        }
+        return false;
+    }
+
+    private ProgramLocation getContextLocation(ActionContext context) {
+        if (context instanceof ProgramLocationSupplierContext locationContext) {
+            return locationContext.getLocation();
+        }
+        return null;
+    }
+
+    private Patch patchForContext(ActionContext context) {
+        ProgramLocation location = getContextLocation(context);
+        if (location == null) {
+            return null;
+        }
+        return findPatchAt(location.getByteAddress());
+    }
+
+    private Patch findPatchAt(Address address) {
+        if (address == null) {
+            return null;
+        }
+        for (Patch patch : patches) {
+            if (patch.address.getAddressSpace().equals(address.getAddressSpace())
+                    && patch.address.compareTo(address) <= 0
+                    && patch.getEndAddress().compareTo(address) >= 0) {
+                return patch;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isToggleState(PatchState state) {
+        return state == PatchState.ENABLED || state == PatchState.DISABLED;
+    }
+
+    private void togglePatchForContext(ActionContext context) {
+        Patch patch = patchForContext(context);
+        if (patch == null || !canEditPatches()) {
+            return;
+        }
+        togglePatch(patch);
+    }
+
+    private void togglePatch(Patch patch) {
+        PatchState state = patch.getState(this);
+        if (state == PatchState.ENABLED) {
+            setPatchEnabled(patch, false);
+        }
+        else if (state == PatchState.DISABLED) {
+            setPatchEnabled(patch, true);
+        }
+        else {
+            showConflict(patch, state);
+        }
+    }
+
+    void showPatchInfoForSelectedPatch() {
+        if (provider == null) {
+            return;
+        }
+        showPatchInfo(provider.getSelectedPatch());
+    }
+
+    void showPatchInfo(Patch patch) {
+        if (patch == null || activeProgram == null || patchInfoDialog == null) {
+            return;
+        }
+        patchInfoDialog.setPatch(patch);
+        if (!patchInfoDialog.isVisible()) {
+            tool.showDialog(patchInfoDialog);
+        }
+        patchInfoDialog.toFront();
+    }
+
     byte[] readSuggestedOriginalBytes() {
         Address address = getSuggestedPatchAddress();
         if (address == null || activeProgram == null) {
             return new byte[] { 0 };
         }
         try {
-            // A contiguous Listing selection is a convenient default patch length.
             if (currentSelection != null && !currentSelection.isEmpty()
                     && currentSelection.getNumAddressRanges() == 1
                     && currentSelection.getFirstRange().getMinAddress().equals(address)) {
@@ -183,9 +380,6 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                     return readBytes(address, (int) length);
                 }
             }
-
-            // When the cursor is at the beginning of an instruction, default to the whole
-            // instruction rather than an arbitrary one-byte patch.
             Instruction instruction = activeProgram.getListing().getInstructionContaining(address);
             if (instruction != null && instruction.getMinAddress().equals(address)) {
                 return readBytes(address, instruction.getLength());
@@ -208,6 +402,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         return bytes;
     }
+
 
     void addPatchFromUi() {
         if (!canEditPatches()) {
@@ -390,6 +585,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
     }
 
+
     void togglePatchAtModelRow(int modelRow) {
         if (!canEditPatches() || provider == null) {
             return;
@@ -558,6 +754,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                         command.enableCodeAnalysis(true);
                         if (!command.applyTo(program, monitor)) {
                             success = false;
+                            success = false;
                         }
                     }
                     return success;
@@ -712,6 +909,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         return new ReassemblyRange(start, finish);
     }
 
+
     void deleteSelectedPatches() {
         int[] rows = provider.getSelectedModelRows();
         if (rows.length == 0 || !canEditPatches()) {
@@ -760,11 +958,19 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (activeProgram == null) {
             provider.setPatches(List.of());
             provider.setStatus("No program");
+            if (patchInfoDialog != null) {
+                patchInfoDialog.clearPatch();
+            }
+            tool.contextChanged(null);
             return;
         }
         provider.setPatches(patches);
         provider.setStatus(patches.size() + " patch" + (patches.size() == 1 ? "" : "es")
                 + " in " + activeProgram.getName());
+        if (patchInfoDialog != null && patchInfoDialog.isVisible()) {
+            patchInfoDialog.refresh();
+        }
+        tool.contextChanged(null);
     }
 
     private void loadFromProgram(Program program) {
@@ -859,6 +1065,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             Msg.error(this, "Unable to serialize patch state", e);
         }
     }
+
 
     void exportPatchSet() {
         if (activeProgram == null) {

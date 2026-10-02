@@ -56,6 +56,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     private final JButton addButton = new JButton("Add Patch...");
     private final JButton editButton = new JButton("Edit...");
     private final JButton toggleButton = new JButton("Toggle");
+    private final JButton infoButton = new JButton("Patch Info");
     private final JButton deleteButton = new JButton("Delete");
     private final JButton captureButton = new JButton("Capture Existing...");
     private final JButton enableAllButton = new JButton("Enable All");
@@ -68,7 +69,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     private final JPanel buttonStrip = new JPanel();
     private final JButton overflowButton = new JButton("\u22ee");
     private final List<JButton> actionButtons = List.of(
-        addButton, captureButton, editButton, toggleButton, deleteButton,
+        addButton, captureButton, editButton, toggleButton, infoButton, deleteButton,
         enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
     );
     private List<JButton> visibleButtons = new ArrayList<>();
@@ -88,7 +89,6 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     }
 
     private static Icon sizedIcon(Icon icon) {
-        // Ghidra-aware scaling (handles GIcon / theme-aware icons)
         return ResourceManager.getScaledIcon(icon, ICON_SIZE, ICON_SIZE);
     }
 
@@ -120,46 +120,49 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     private void configureButtons() {
         addButton.setIcon(sizedIcon(Icons.ADD_ICON));
         addButton.setIconTextGap(4);
-        addButton.setToolTipText("Create a new patch");
+        addButton.setToolTipText("Create a new patch (Ctrl+Alt+Shift + A)");
 
         captureButton.setIcon(sizedIcon(Icons.COPY_ICON));
         captureButton.setIconTextGap(4);
-        captureButton.setToolTipText("Capture existing modifications in the current program");
+        captureButton.setToolTipText("Capture existing modifications in the current program (Ctrl+Alt+Shift + C)");
 
         editButton.setIcon(sizedIcon(new GIcon("icon.properties")));
         editButton.setIconTextGap(4);
-        editButton.setToolTipText("Edit the selected patch");
+        editButton.setToolTipText("Edit the selected patch (Ctrl+Alt+Shift + E)");
 
         toggleButton.setIcon(sizedIcon(new GIcon("icon.run")));
         toggleButton.setIconTextGap(4);
-        toggleButton.setToolTipText("Toggle the selected patch between enabled and disabled");
+        toggleButton.setToolTipText("Toggle the selected patch (Ctrl+Alt+Shift + T)");
+
+        infoButton.setIconTextGap(4);
+        infoButton.setToolTipText("Show detailed information for the selected patch (Ctrl+Alt+Shift + U)");
 
         deleteButton.setIcon(sizedIcon(Icons.DELETE_ICON));
         deleteButton.setIconTextGap(4);
-        deleteButton.setToolTipText("Delete the selected patch");
+        deleteButton.setToolTipText("Delete the selected patch or patches (Ctrl+Alt+Shift + D)");
 
         enableAllButton.setIcon(sizedIcon(new GIcon("icon.plugin.bundlemanager.enable")));
         enableAllButton.setIconTextGap(4);
-        enableAllButton.setToolTipText("Enable all patches");
+        enableAllButton.setToolTipText("Enable all patches (Ctrl+Alt+Shift + Y)");
 
         disableAllButton.setIcon(sizedIcon(new GIcon("icon.plugin.bundlemanager.disable")));
         disableAllButton.setIconTextGap(4);
-        disableAllButton.setToolTipText("Disable all patches");
+        disableAllButton.setToolTipText("Disable all patches (Ctrl+Alt+Shift + N)");
 
         saveButton.setIcon(sizedIcon(Icons.SAVE_AS_ICON));
         saveButton.setIconTextGap(4);
-        saveButton.setToolTipText("Save the patch set to a file");
+        saveButton.setToolTipText("Save the patch set to a file (Ctrl+Alt+Shift + S)");
 
         loadButton.setIcon(sizedIcon(Icons.OPEN_FOLDER_ICON));
         loadButton.setIconTextGap(4);
-        loadButton.setToolTipText("Load a patch set from a file");
+        loadButton.setToolTipText("Load a patch set from a file (Ctrl+Alt+Shift + L)");
 
         refreshButton.setIcon(sizedIcon(Icons.REFRESH_ICON));
         refreshButton.setIconTextGap(4);
-        refreshButton.setToolTipText("Refresh patch states from the current program");
+        refreshButton.setToolTipText("Refresh patch states (Ctrl+Alt+Shift + R)");
 
         equalizeHeights(
-            addButton, captureButton, editButton, toggleButton, deleteButton,
+            addButton, captureButton, editButton, toggleButton, infoButton, deleteButton,
             enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
         );
 
@@ -167,6 +170,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         captureButton.addActionListener(e -> plugin.captureCurrentChanges());
         editButton.addActionListener(e -> plugin.editSelectedPatch());
         toggleButton.addActionListener(e -> plugin.toggleSelectedPatch());
+        infoButton.addActionListener(e -> plugin.showPatchInfoForSelectedPatch());
         deleteButton.addActionListener(e -> plugin.deleteSelectedPatches());
         enableAllButton.addActionListener(e -> plugin.setAllPatchesEnabled(true));
         disableAllButton.addActionListener(e -> plugin.setAllPatchesEnabled(false));
@@ -225,7 +229,6 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
                 used = candidate;
             }
 
-            // If everything actually fits, don't reserve space for the overflow button.
             if (nextVisible.size() == actionButtons.size()) {
                 needOverflow = false;
             }
@@ -286,6 +289,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         menu.show(overflowButton, 0, overflowButton.getHeight());
     }
 
+
     private void configureTable() {
         table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         table.setAutoCreateRowSorter(true);
@@ -318,16 +322,9 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
 
                 if (table.convertColumnIndexToModel(viewColumn) == PatchTableModel.ENABLED_COL) {
                     if (e.getClickCount() == 1) {
-                        // Do not use JTable's default Boolean cell editor here.  The model's
-                        // Enabled value is derived from the live program bytes, and refreshing
-                        // that model while a Swing cell editor is active can cause the editor
-                        // to submit a stale value (sometimes multiple times).  Treat the checkbox
-                        // as a visual toggle target instead and let the plugin derive the desired
-                        // state from the current patch state.
                         table.getSelectionModel().setSelectionInterval(viewRow, viewRow);
                         plugin.togglePatchAtModelRow(table.convertRowIndexToModel(viewRow));
                     }
-                    // A double-click on the checkbox should toggle once, not also navigate.
                     return;
                 }
 
@@ -432,6 +429,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         return null;
     }
 
+
     private JPanel statusLabelPanel() {
         JPanel bottom = new JPanel(new BorderLayout());
         bottom.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
@@ -499,8 +497,11 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         boolean hasSelection = table.getSelectedRowCount() > 0;
         boolean one = table.getSelectedRowCount() == 1;
         boolean busy = !plugin.canEditPatches();
-        editButton.setEnabled(one && !busy && plugin.selectedPatchIsEditable());
-        toggleButton.setEnabled(one && !busy && plugin.selectedPatchIsEditable());
+        boolean hasPatch = one && getSelectedPatch() != null;
+        editButton.setEnabled(hasPatch && !busy && plugin.selectedPatchIsEditable());
+        toggleButton.setEnabled(hasPatch && !busy && plugin.selectedPatchIsEditable());
+        infoButton.setEnabled(hasPatch && !busy);
         deleteButton.setEnabled(hasSelection && !busy);
+        plugin.notifyContextChanged();
     }
 }

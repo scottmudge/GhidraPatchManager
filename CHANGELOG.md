@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+- Added a read-only **Patch Info** window with individually copyable metadata fields.
+- Added file offset/RVA reporting, imported source-file information, memory-block information, and live current-byte display.
+- Added selectable byte renderings for hexadecimal, Base64, ASCII, UTF-8, UTF-16, and available Java charsets.
+- Added normal Ghidra DockingAction keybindings for Patch Manager actions.
+- Added context-sensitive CodeBrowser hotkeys for Add, Capture Existing, Toggle-at-location, and Patch Info-at-location.
+
 ## 1.0.3
 - Optimize build to exclude unneeded files
 - Add icons to buttons
