@@ -75,7 +75,11 @@ final class PatchTableModel extends AbstractTableModel {
 
     @Override
     public boolean isCellEditable(int rowIndex, int columnIndex) {
-        return columnIndex == ENABLED_COL && plugin.canEditPatches();
+        // The Enabled column uses a Boolean renderer for the checkbox appearance,
+        // but is deliberately not a JTable cell editor.  The provider handles clicks
+        // explicitly so a live state refresh cannot feed stale Boolean values back into
+        // the patch manager.
+        return false;
     }
 
     @Override
@@ -91,17 +95,6 @@ final class PatchTableModel extends AbstractTableModel {
             case STATE_COL -> state.toString();
             default -> "";
         };
-    }
-
-    @Override
-    public void setValueAt(Object value, int rowIndex, int columnIndex) {
-        if (columnIndex != ENABLED_COL || !(value instanceof Boolean)) {
-            return;
-        }
-        Patch patch = getPatch(rowIndex);
-        if (patch != null) {
-            plugin.setPatchEnabled(patch, (Boolean) value);
-        }
     }
 
     void refresh() {

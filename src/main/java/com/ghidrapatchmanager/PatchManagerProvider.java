@@ -103,7 +103,33 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         table.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                if (!SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+
+                int viewRow = table.rowAtPoint(e.getPoint());
+                int viewColumn = table.columnAtPoint(e.getPoint());
+                if (viewRow < 0 || viewColumn < 0) {
+                    return;
+                }
+
+                if (table.convertColumnIndexToModel(viewColumn) == PatchTableModel.ENABLED_COL) {
+                    if (e.getClickCount() == 1) {
+                        // Do not use JTable's default Boolean cell editor here.  The model's
+                        // Enabled value is derived from the live program bytes, and refreshing
+                        // that model while a Swing cell editor is active can cause the editor
+                        // to submit a stale value (sometimes multiple times).  Treat the checkbox
+                        // as a visual toggle target instead and let the plugin derive the desired
+                        // state from the current patch state.
+                        table.getSelectionModel().setSelectionInterval(viewRow, viewRow);
+                        plugin.togglePatchAtModelRow(table.convertRowIndexToModel(viewRow));
+                    }
+                    // A double-click on the checkbox should toggle once, not also navigate.
+                    return;
+                }
+
+                if (e.getClickCount() == 2) {
+                    table.getSelectionModel().setSelectionInterval(viewRow, viewRow);
                     plugin.jumpToSelectedPatch();
                 }
             }

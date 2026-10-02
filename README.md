@@ -55,3 +55,14 @@ The plugin intentionally does not silently overwrite a location whose current by
 ## Notes
 
 This is source-complete but should be built against the exact Ghidra version you intend to use. The build environment available while this project was generated did not contain a local Ghidra installation, so the final Ghidra extension zip could not be compiled here.
+
+
+## 1.0.2 changes
+
+- Enabled-column checkboxes are now handled as explicit mouse toggle targets instead of JTable Boolean cell editors.
+- Prevents stale/repeated checkbox submissions and duplicate Patch Conflict dialogs.
+- Prevents double-clicking the checkbox from also navigating.
+- Keeps patch editing locked until automatic background re-disassembly finishes.
+- Coalesces redundant program-change refreshes.
+- Honors “Apply patch immediately” when editing a disabled patch without changing its definition.
+- Tightens validation of stored patch definitions.

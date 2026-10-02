@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
@@ -27,6 +28,7 @@ import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.ProgramPlugin;
 import ghidra.framework.model.DomainObjectChangedEvent;
 import ghidra.framework.model.DomainObjectListener;
+import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.options.Options;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
@@ -44,6 +46,7 @@ import ghidra.util.HelpLocation;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
 import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.util.exception.CancelledException;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -64,6 +67,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private List<Patch> patches = new ArrayList<>();
     private boolean busy;
     private boolean internalChange;
+    private final AtomicBoolean refreshPending = new AtomicBoolean();
 
     public PatchManagerPlugin(PluginTool tool) {
         super(tool);
@@ -137,7 +141,15 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (internalChange || provider == null || busy) {
             return;
         }
-        javax.swing.SwingUtilities.invokeLater(this::refreshProvider);
+        if (!refreshPending.compareAndSet(false, true)) {
+            return;
+        }
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            refreshPending.set(false);
+            if (provider != null && !busy) {
+                refreshProvider();
+            }
+        });
     }
 
     @Override
@@ -355,7 +367,9 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (result == null) {
             return;
         }
-        if (Arrays.equals(result.patchedBytes(), patch.patchedBytes) && result.name().equals(patch.name)) {
+        boolean definitionChanged = !Arrays.equals(result.patchedBytes(), patch.patchedBytes)
+                || !result.name().equals(patch.name);
+        if (!definitionChanged && !result.enabled()) {
             return;
         }
         if (result.address().equals(patch.address) && !Arrays.equals(result.originalBytes(), patch.originalBytes)) {
@@ -373,6 +387,26 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         provider.selectPatch(patch);
         if (result.enabled()) {
             setPatchEnabled(patch, true);
+        }
+    }
+
+    void togglePatchAtModelRow(int modelRow) {
+        if (!canEditPatches() || provider == null) {
+            return;
+        }
+        Patch patch = provider.getModel().getPatch(modelRow);
+        if (patch == null) {
+            return;
+        }
+        PatchState state = patch.getState(this);
+        if (state == PatchState.ENABLED) {
+            setPatchEnabled(patch, false);
+        }
+        else if (state == PatchState.DISABLED) {
+            setPatchEnabled(patch, true);
+        }
+        else {
+            showConflict(patch, state);
         }
     }
 
@@ -447,7 +481,6 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
 
         busy = true;
-        provider.refreshTable();
         internalChange = true;
         boolean committed = false;
         List<ReassemblyRange> reassemblyRanges = new ArrayList<>();
@@ -485,23 +518,82 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                     patches.add(patch);
                 }
             }
-            saveToProgram();
+            try {
+                saveToProgram();
+            }
+            catch (RuntimeException e) {
+                // The byte transaction has already committed. Keep the in-memory patch set
+                // usable and report that persistence failed rather than leaving the plugin
+                // permanently busy.
+                Msg.error(this, "Unable to persist Patch Manager state", e);
+            }
         }
 
-        // Disassembly is deliberately performed after the byte transaction commits. This mirrors
-        // Ghidra's own edit-bytes workflow: clear code units, write bytes, then invoke the normal
-        // DisassembleCommand so references, flow and decompiler consumers see the new code.
-        for (ReassemblyRange range : mergeRanges(reassemblyRanges)) {
-            DisassembleCommand command = new DisassembleCommand(range.start(),
-                    new AddressSet(range.start(), range.end()), true);
-            command.enableCodeAnalysis(true);
-            tool.executeBackgroundCommand(command, activeProgram);
+        // Disassembly is deliberately performed after the byte transaction commits. Keep the
+        // plugin busy until the background re-disassembly has actually completed; otherwise a
+        // fast second click can race the first DisassembleCommand and observe a transient state.
+        List<ReassemblyRange> mergedRanges = mergeRanges(reassemblyRanges);
+        if (mergedRanges.isEmpty()) {
+            busy = false;
+            refreshProvider();
+            provider.setStatus((enabled ? "Enabled " : "Disabled ") + targets.size() + " patch"
+                    + (targets.size() == 1 ? "" : "es") + ".");
+            return;
         }
 
+        Program programAtSchedule = activeProgram;
+        tool.executeBackgroundCommand(new BackgroundCommand<Program>(
+                "Re-disassemble Ghidra patches", true, false, false) {
+            @Override
+            public boolean applyTo(Program program, TaskMonitor monitor) {
+                boolean success = true;
+                try {
+                    for (ReassemblyRange range : mergedRanges) {
+                        if (monitor.isCancelled()) {
+                            success = false;
+                            return false;
+                        }
+                        DisassembleCommand command = new DisassembleCommand(range.start(),
+                                new AddressSet(range.start(), range.end()), true);
+                        command.enableCodeAnalysis(true);
+                        if (!command.applyTo(program, monitor)) {
+                            success = false;
+                        }
+                    }
+                    return success;
+                }
+                catch (RuntimeException e) {
+                    success = false;
+                    Msg.error(PatchManagerPlugin.this,
+                            "Automatic patch re-disassembly failed", e);
+                    return false;
+                }
+                finally {
+                    boolean finalSuccess = success;
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            finishReassembly(programAtSchedule, enabled, targets.size(), finalSuccess));
+                }
+            }
+        }, programAtSchedule);
+    }
+
+    private void finishReassembly(Program program, boolean enabled, int count, boolean success) {
+        // The command may finish after the user switches programs.  'busy' is plugin-global,
+        // so it must still be cleared even though the completed command belongs to the old
+        // program. Refresh whichever program is currently active.
         busy = false;
+        if (activeProgram != program) {
+            refreshProvider();
+            return;
+        }
         refreshProvider();
-        provider.setStatus((enabled ? "Enabled " : "Disabled ") + targets.size() + " patch"
-                + (targets.size() == 1 ? "" : "es") + ".");
+        if (success) {
+            provider.setStatus((enabled ? "Enabled " : "Disabled ") + count + " patch"
+                    + (count == 1 ? "" : "es") + ".");
+        }
+        else {
+            provider.setStatus("Patch byte change applied, but automatic re-disassembly did not complete.");
+        }
     }
 
     private List<ReassemblyRange> mergeRanges(List<ReassemblyRange> ranges) {
@@ -721,12 +813,14 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
 
     private boolean validateStoredPatch(Program program, Patch patch) {
         if (patch.address == null || patch.originalBytes.length == 0
-                || patch.originalBytes.length != patch.patchedBytes.length) {
+                || patch.originalBytes.length != patch.patchedBytes.length
+                || Arrays.equals(patch.originalBytes, patch.patchedBytes)) {
             return false;
         }
         try {
             byte[] current = new byte[patch.originalBytes.length];
-            return program.getMemory().getBytes(patch.address, current) == current.length;
+            return program.getMemory().getBytes(patch.address, current) == current.length
+                    && program.getMemory().getBlock(patch.address) != null;
         }
         catch (Exception e) {
             return false;
