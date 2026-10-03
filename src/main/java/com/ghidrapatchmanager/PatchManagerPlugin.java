@@ -67,6 +67,8 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private static final int HOTKEY_MODIFIERS = java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.ALT_DOWN_MASK;
     private static final int HOTKEY_SHIFT_MODIFIERS = HOTKEY_MODIFIERS | java.awt.event.InputEvent.SHIFT_DOWN_MASK;
     private static final String ORIGINAL_DISASSEMBLY_OPTION = "Show Original Disassembly Comments";
+    private static final String PATCH_NAME_OPTION = "Show Patch Names in Comments";
+    private static final String PATCH_NAME_PREFIX = "Patch: ";
     private static final String ORIGINAL_COMMENT_PREFIX = "[Original disassembly @ ";
     private static final String ORIGINAL_COMMENT_SUFFIX = "]";
     private static final String ORIGINAL_COMMENT_END_PREFIX = "[/Original disassembly @ ";
@@ -88,7 +90,8 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private final OptionsChangeListener patchToolOptionsListener = new OptionsChangeListener() {
         @Override
         public void optionsChanged(ToolOptions options, String optionName, Object oldValue, Object newValue) {
-            if (options == patchToolOptions && ORIGINAL_DISASSEMBLY_OPTION.equals(optionName)) {
+            if (options == patchToolOptions
+                    && (ORIGINAL_DISASSEMBLY_OPTION.equals(optionName) || PATCH_NAME_OPTION.equals(optionName))) {
                 requestOriginalDisassemblyReconcile();
             }
         }
@@ -105,6 +108,8 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         patchToolOptions = tool.getOptions(OPTION_PATH);
         patchToolOptions.registerOption(ORIGINAL_DISASSEMBLY_OPTION, Boolean.TRUE, null,
                 "Show a gold-highlighted PRE comment containing the original disassembly for enabled patches.");
+        patchToolOptions.registerOption(PATCH_NAME_OPTION, Boolean.TRUE, null,
+                "Show custom patch names in managed PRE comments for enabled patches.");
         patchToolOptions.addOptionsChangeListener(patchToolOptionsListener);
         highlightManager = new PatchHighlightManager(this, tool);
         tool.addComponentProvider(provider, false);
@@ -319,6 +324,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
 
     boolean isOriginalDisassemblyCommentsEnabled() {
         return patchToolOptions == null || patchToolOptions.getBoolean(ORIGINAL_DISASSEMBLY_OPTION, true);
+    }
+
+    boolean isPatchNameCommentsEnabled() {
+        return patchToolOptions == null || patchToolOptions.getBoolean(PATCH_NAME_OPTION, true);
     }
 
     boolean hasOriginalDisassembly(Patch patch) {
@@ -655,7 +664,21 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return;
         }
 
-        patch.name = replacement.name;
+        if (nameChanged) {
+            int commentTx = activeProgram.startTransaction("Update patch name comment");
+            try {
+                removeOriginalDisassemblyComment(activeProgram, patch);
+                patch.name = replacement.name;
+                activeProgram.endTransaction(commentTx, true);
+            }
+            catch (RuntimeException e) {
+                activeProgram.endTransaction(commentTx, false);
+                throw e;
+            }
+        }
+        else {
+            patch.name = replacement.name;
+        }
         patch.patchedBytes = replacement.patchedBytes;
         saveToProgram();
         refreshProvider();
@@ -665,6 +688,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             setPatchEnabled(patch, enabledAfter);
         }
         else {
+            requestOriginalDisassemblyReconcile();
             provider.setStatus("Updated patch '" + patch.name + "'.");
         }
     }
@@ -1124,39 +1148,40 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         originalDisassemblyReconcilePending = false;
 
-        if (!isOriginalDisassemblyCommentsEnabled()) {
-            removeAllOriginalDisassemblyComments(activeProgram);
-            if (highlightManager != null) {
-                highlightManager.refresh();
+        if (isOriginalDisassemblyCommentsEnabled()) {
+            List<Patch> missing = new ArrayList<>();
+            for (Patch patch : patches) {
+                if (patch.getState(this) == PatchState.ENABLED && !hasOriginalDisassembly(patch)) {
+                    missing.add(patch);
+                }
             }
-            return;
-        }
-
-        List<Patch> missing = new ArrayList<>();
-        for (Patch patch : patches) {
-            if (patch.getState(this) == PatchState.ENABLED && !hasOriginalDisassembly(patch)) {
-                missing.add(patch);
+            if (!missing.isEmpty()) {
+                startOriginalDisassemblyMigration(activeProgram, missing, new ArrayList<>(patches));
+                return;
             }
-        }
-        if (!missing.isEmpty()) {
-            startOriginalDisassemblyMigration(activeProgram, missing, new ArrayList<>(patches));
-            return;
         }
         applyOriginalDisassemblyComments(activeProgram);
     }
 
     private void applyOriginalDisassemblyComments(Program program) {
-        if (program == null || program != activeProgram || !isOriginalDisassemblyCommentsEnabled()) {
+        if (program == null || program != activeProgram) {
             return;
         }
-        int tx = program.startTransaction("Update original patch comments");
+        int tx = program.startTransaction("Update patch comments");
         try {
             for (Patch patch : patches) {
-                if (patch.getState(this) == PatchState.ENABLED && hasOriginalDisassembly(patch)) {
+                boolean enabled = patch.getState(this) == PatchState.ENABLED;
+                boolean hasOriginal = isOriginalDisassemblyCommentsEnabled() && enabled
+                        && hasOriginalDisassembly(patch);
+                if (hasOriginal) {
                     setOriginalDisassemblyComment(program, patch);
                 }
                 else {
                     removeOriginalDisassemblyComment(program, patch);
+                    if (!isOriginalDisassemblyCommentsEnabled() && enabled
+                            && isPatchNameCommentsEnabled() && hasCustomPatchName(patch)) {
+                        setPatchNameComment(program, patch);
+                    }
                 }
             }
             writePatchProperties(program);
@@ -1164,7 +1189,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         catch (RuntimeException e) {
             program.endTransaction(tx, false);
-            Msg.error(this, "Unable to update original disassembly comments", e);
+            Msg.error(this, "Unable to update patch comments", e);
         }
         if (highlightManager != null) {
             highlightManager.refresh();
@@ -1175,7 +1200,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (program == null) {
             return;
         }
-        int tx = program.startTransaction("Remove original patch comments");
+        int tx = program.startTransaction("Remove patch comments");
         try {
             for (Patch patch : patches) {
                 removeOriginalDisassemblyComment(program, patch);
@@ -1184,7 +1209,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         catch (RuntimeException e) {
             program.endTransaction(tx, false);
-            Msg.error(this, "Unable to remove original disassembly comments", e);
+            Msg.error(this, "Unable to remove patch comments", e);
         }
     }
 
@@ -1236,6 +1261,34 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         String existing = codeUnit.getComment(CommentType.PRE);
         String managed = buildOriginalDisassemblyComment(patch);
         String replacement = removeManagedOriginalComment(existing, patch);
+        replacement = removeManagedPatchNameComment(replacement, patch);
+        if (replacement == null || replacement.isBlank()) {
+            replacement = managed;
+        }
+        else {
+            replacement = replacement + "\n\n" + managed;
+        }
+        if (Objects.equals(existing, replacement)) {
+            return false;
+        }
+        codeUnit.setComment(CommentType.PRE, replacement);
+        return true;
+    }
+
+    private boolean setPatchNameComment(Program program, Patch patch) {
+        if (program == null || patch == null || !hasCustomPatchName(patch)
+                || !isPatchNameCommentsEnabled()) {
+            return false;
+        }
+        CodeUnit codeUnit = getOriginalCommentCodeUnit(program, patch);
+        if (codeUnit == null) {
+            return false;
+        }
+
+        String existing = codeUnit.getComment(CommentType.PRE);
+        String managed = PATCH_NAME_PREFIX + patch.name;
+        String replacement = removeManagedOriginalComment(existing, patch);
+        replacement = removeManagedPatchNameComment(replacement, patch);
         if (replacement == null || replacement.isBlank()) {
             replacement = managed;
         }
@@ -1262,6 +1315,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return false;
         }
         String replacement = removeManagedOriginalComment(existing, patch);
+        replacement = removeManagedPatchNameComment(replacement, patch);
         if (Objects.equals(existing, replacement)) {
             return false;
         }
@@ -1278,9 +1332,20 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         return listing.getCodeUnitAt(patch.address);
     }
 
-    private static String buildOriginalDisassemblyComment(Patch patch) {
-        return originalCommentStart(patch) + "\n" + patch.originalDisassembly
+    private String buildOriginalDisassemblyComment(Patch patch) {
+        String start = originalCommentStart(patch);
+        if (isPatchNameCommentsEnabled() && hasCustomPatchName(patch)) {
+            start += " - Patch: " + patch.name;
+        }
+        return start + "\n" + patch.originalDisassembly
                 + "\n" + originalCommentEnd(patch);
+    }
+
+    private static boolean hasCustomPatchName(Patch patch) {
+        if (patch == null || patch.name == null || patch.name.isBlank()) {
+            return false;
+        }
+        return !patch.name.equals("Patch @ " + patch.address);
     }
 
     private static String originalCommentStart(Patch patch) {
@@ -1302,7 +1367,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         boolean removing = false;
         boolean found = false;
         for (String line : lines) {
-            if (!removing && line.equals(start)) {
+            if (!removing && (line.equals(start) || line.startsWith(start + " - Patch: "))) {
                 removing = true;
                 found = true;
                 continue;
@@ -1316,6 +1381,33 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             kept.add(line);
         }
         if (!found || removing) {
+            return comment;
+        }
+        while (!kept.isEmpty() && kept.get(0).isBlank()) {
+            kept.remove(0);
+        }
+        while (!kept.isEmpty() && kept.get(kept.size() - 1).isBlank()) {
+            kept.remove(kept.size() - 1);
+        }
+        return String.join("\n", kept);
+    }
+
+    private static String removeManagedPatchNameComment(String comment, Patch patch) {
+        if (comment == null || comment.isEmpty() || !hasCustomPatchName(patch)) {
+            return comment;
+        }
+        String managed = PATCH_NAME_PREFIX + patch.name;
+        String[] lines = comment.split("\n", -1);
+        List<String> kept = new ArrayList<>();
+        boolean removed = false;
+        for (String line : lines) {
+            if (!removed && line.equals(managed)) {
+                removed = true;
+                continue;
+            }
+            kept.add(line);
+        }
+        if (!removed) {
             return comment;
         }
         while (!kept.isEmpty() && kept.get(0).isBlank()) {

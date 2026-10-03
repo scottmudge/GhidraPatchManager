@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.3
+- Added **Show Patch Names in Comments**, enabled by default, under **Edit -> Tool Options -> Ghidra Patch Manager**.
+- Custom patch names are appended to the first line of the managed original-disassembly comment as ` - Patch: <patch name>`.
+- When original-disassembly comments are disabled, custom patch names are shown as a standalone `Patch: <patch name>` PRE comment.
+- Default `Patch @ <address>` names are never added to comments.
+- Changing a custom patch name now immediately reconciles its managed comment text.
+
 ## 1.3.2
 - Added a confirmation checkbox to **Delete Patch**, enabled by default, to restore original bytes before deleting enabled patches.
 - Restoring deleted enabled patches now clears only the affected instruction units and automatically re-disassembles those ranges.
