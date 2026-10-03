@@ -31,15 +31,15 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 
 ## Hotkeys
 
-Actions are registered as normal Ghidra Docking actions, so their default keybindings appear in Ghidra's **Edit -> Tool Options -> Key Bindings** and can be changed there. The defaults use `Ctrl+Alt+Shift` to reduce collisions with ordinary CodeBrowser navigation and editing shortcuts.
+Actions are registered as normal Ghidra Docking actions, so their default keybindings appear in Ghidra's **Edit -> Tool Options -> Key Bindings** and can be changed there. The defaults use `Ctrl+Alt+Shift` to reduce collisions with ordinary CodeBrowser navigation and editing shortcuts. There should be no other default Ghidra key bindings using the below defaults.
 
 | Action | Default | Scope |
 |---|---|---|
-| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P` | Global |
+| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P`  &nbsp; | Global |
 | Patch Manager: Add Patch | `Ctrl+Alt+Shift + A` | CodeBrowser/program location |
 | Patch Manager: Capture Existing Patch | `Ctrl+Alt+Shift + C` | CodeBrowser/program location |
-| Patch Manager: Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when a managed patch contains the current location |
-| Patch Manager: Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when a managed patch contains the current location |
+| Patch Manager: Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when patch exists at current location |
+| Patch Manager: Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when patch exists at current location |
 | Patch Manager: Edit Patch | `Ctrl+Alt+Shift + E` | Patch Manager selection |
 | Patch Manager: Delete Patch | `Ctrl+Alt+Shift + D` | Patch Manager selection |
 | Patch Manager: Enable All Patches | `Ctrl+Alt+Shift + Y` | Patch Manager |
