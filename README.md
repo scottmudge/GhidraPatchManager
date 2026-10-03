@@ -65,7 +65,7 @@ For legacy enabled patches that predate this feature, the extension performs a o
 
 ## Building
 
-Requires **Ghidra 12.1.x** and **JDK 21**. The project follows the same Gradle extension-build mechanism used by current Ghidra extensions.
+Requires **Ghidra 12.1.x** and **JDK 25**. The project follows the same Gradle extension-build mechanism used by current Ghidra extensions.
 
 Set `GHIDRA_INSTALL_DIR` and run:
 
@@ -101,7 +101,7 @@ The plugin intentionally does not silently overwrite a location whose current by
 
 ## Notes
 
-The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 21**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
+The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 25**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
 ---
 
