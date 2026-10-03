@@ -32,6 +32,9 @@ if (ghidraInstallDir) {
         exclude "settings.gradle"
         exclude ".gitignore"
 
+        // Exclude GitHub workflows and other .github contents
+        exclude ".github/**"
+
         // Ghidra's buildExtension task normally bundles the source ZIP.
         exclude "**/*-src*.zip"
     }
