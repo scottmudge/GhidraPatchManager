@@ -35,19 +35,19 @@ Actions are registered as normal Ghidra Docking actions, so their default keybin
 
 | Action | Default | Scope |
 |---|---|---|
-| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P`  &nbsp; &nbsp; &nbsp; | Global |
-| Patch Manager: Add Patch | `Ctrl+Alt+Shift + A` | CodeBrowser/program location |
-| Patch Manager: Capture Existing Patch | `Ctrl+Alt+Shift + C` | CodeBrowser/program location |
-| Patch Manager: Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when patch exists at current location |
-| Patch Manager: Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when patch exists at current location |
-| Patch Manager: Edit Patch | `Ctrl+Alt+Shift + E` | Patch Manager selection |
-| Patch Manager: Delete Patch | `Ctrl+Alt+Shift + D` | Patch Manager selection |
-| Patch Manager: Enable All Patches | `Ctrl+Alt+Shift + Y` | Patch Manager |
-| Patch Manager: Disable All Patches | `Ctrl+Alt+Shift + N` | Patch Manager |
-| Patch Manager: Patch Info | `Ctrl+Alt+Shift + U` | Patch Manager selection |
-| Patch Manager: Save Patch Set | `Ctrl+Alt+Shift + S` | Patch Manager |
-| Patch Manager: Load Patch Set | `Ctrl+Alt+Shift + L` | Patch Manager |
-| Patch Manager: Refresh Patch Manager | `Ctrl+Alt+Shift + R` | Patch Manager |
+| Show Patch Manager | `Ctrl+Alt+Shift + P`  &nbsp; &nbsp; &nbsp; | Global |
+| Add Patch | `Ctrl+Alt+Shift + A` | CodeBrowser/program location |
+| Capture Existing Patch | `Ctrl+Alt+Shift + C` | CodeBrowser/program location |
+| Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when patch exists at current location |
+| Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when patch exists at current location |
+| Edit Patch | `Ctrl+Alt+Shift + E` | Patch Manager selection |
+| Delete Patch | `Ctrl+Alt+Shift + D` | Patch Manager selection |
+| Enable All Patches | `Ctrl+Alt+Shift + Y` | Patch Manager |
+| Disable All Patches | `Ctrl+Alt+Shift + N` | Patch Manager |
+| Patch Info | `Ctrl+Alt+Shift + U` | Patch Manager selection |
+| Save Patch Set | `Ctrl+Alt+Shift + S` | Patch Manager |
+| Load Patch Set | `Ctrl+Alt+Shift + L` | Patch Manager |
+| Refresh Patch Manager | `Ctrl+Alt+Shift + R` | Patch Manager |
 
 The **Toggle Patch At Location** and **Patch Info At Location** actions deliberately do nothing when the current CodeBrowser location is not inside a managed patch. This includes patches where the cursor is in the middle of the patch, not only exactly at its start address.
 
