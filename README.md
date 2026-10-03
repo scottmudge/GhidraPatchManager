@@ -17,7 +17,8 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - The manager stores the original bytes and replacement bytes.
 - Enable/disable patches with a checkbox, button, Space, or **Enable All / Disable All**.
 - Double-click a patch to jump to its address in the Listing.
-- **Patch Info** opens a read-only, copy-friendly detail window containing the patch name/state, address and end address, RVA, file offset(s), length, address space, image base, source file, memory block, and current bytes.
+- **Toggle behavior:** toggling a selected patch keeps that patch selected, returns keyboard focus to the Patch Manager table, and moves the Listing to the toggled patch address. This makes repeated Toggle/Space presses operate on the same patch without reselecting it.
+- **Patch Info** opens a read-only, copy-friendly detail window containing the patch name/state, address and end address, RVA, file offset(s), length, address space, image base, source file, memory block, and current bytes. Opening Patch Info also moves the Listing to the patch address.
 - Patch Info byte fields can be viewed as hexadecimal, Base64, ASCII, UTF-8, UTF-16LE/BE, Windows-1252, ISO-8859-1, or any charset exposed by the Java runtime.
 - **Capture Existing...** imports a change you already made with Ghidra's normal byte/instruction patch UI by comparing current bytes against Ghidra's imported original bytes.
 - Automatically clears affected code units and invokes Ghidra's normal `DisassembleCommand` after byte changes, eliminating the manual undefine/re-disassemble workflow.
@@ -111,6 +112,12 @@ The plugin intentionally does not silently overwrite a location whose current by
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 25**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
 ---
+
+## 1.3.5 Changes
+
+- Preserve the selected patch and Patch Manager table focus when toggling from the toolbar or Enabled checkbox.
+- Move the CodeBrowser Listing to the toggled patch address, including after background re-disassembly completes.
+- Move the CodeBrowser Listing to the patch address when Patch Info is opened.
 
 ## 1.3.4 Changes
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.5
+- Preserved the selected patch and Patch Manager table focus when toggling from the toolbar or Enabled checkbox.
+- Moved the CodeBrowser Listing to the toggled patch address, including after background re-disassembly completes.
+- Moved the CodeBrowser Listing to the patch address when Patch Info is opened.
+
 ## 1.3.4
 - Renamed **Show Original Disassembly Comments** to **Show Original Disassembly Comments by Default** and changed its default to disabled.
 - Added the **Show Orig** toggle button immediately to the right of **Delete**.
@@ -48,7 +53,7 @@
 ## 1.1.0
 - Added a read-only **Patch Info** window with individually selectable/copyable metadata fields.
 - Added file offset/RVA reporting, imported source-file information, memory-block information, and live current-byte display.
-- Added selectable byte renderings for hexadecimal, Base64, ASCII, UTF-8, UTF-16, and available Java charsets.
+- Added selectable byte renderings for hexadecimal, Base64, ASCII, UTF-8, UTF-16LE/BE, Windows-1252, ISO-8859-1, or any charset exposed by the Java runtime.
 - Added normal Ghidra DockingAction keybindings for Patch Manager actions.
 - Added context-sensitive CodeBrowser hotkeys for Add, Capture Existing, Toggle-at-location, and Patch Info-at-location.
 

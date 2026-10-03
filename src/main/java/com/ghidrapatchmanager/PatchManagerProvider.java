@@ -464,7 +464,14 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     }
 
     void setPatches(List<Patch> patches) {
+        // Refreshing the model fires a data-change event, which clears JTable selection.
+        // Preserve the currently selected Patch object when it still exists in the refreshed
+        // model so asynchronous program/comment refreshes cannot unexpectedly deselect it.
+        Patch selectedPatch = getSelectedPatch();
         model.setPatches(patches);
+        if (selectedPatch != null && patches.contains(selectedPatch)) {
+            selectPatch(selectedPatch);
+        }
         updateButtons();
     }
 
@@ -508,6 +515,10 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
                 break;
             }
         }
+    }
+
+    void focusTable() {
+        table.requestFocusInWindow();
     }
 
     void setStatus(String text) {

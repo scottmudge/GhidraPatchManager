@@ -414,16 +414,20 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (patch == null || !canEditPatches()) {
             return;
         }
-        togglePatch(patch);
+        togglePatch(patch, false);
     }
 
     private void togglePatch(Patch patch) {
+        togglePatch(patch, false);
+    }
+
+    private void togglePatch(Patch patch, boolean focusPatchManager) {
         PatchState state = patch.getState(this);
         if (state == PatchState.ENABLED) {
-            setPatchEnabled(patch, false);
+            setPatchEnabled(patch, false, focusPatchManager);
         }
         else if (state == PatchState.DISABLED) {
-            setPatchEnabled(patch, true);
+            setPatchEnabled(patch, true, focusPatchManager);
         }
         else {
             showConflict(patch, state);
@@ -441,6 +445,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (patch == null || activeProgram == null || patchInfoDialog == null) {
             return;
         }
+        if (provider != null) {
+            provider.selectPatch(patch);
+        }
+        goTo(patch.address);
         patchInfoDialog.setPatch(patch);
         if (!patchInfoDialog.isVisible()) {
             tool.showDialog(patchInfoDialog);
@@ -524,7 +532,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return;
         }
 
-        setPatchesEnabled(List.of(patch), true, true);
+        setPatchesEnabled(List.of(patch), true, true, null);
         if (!patches.contains(patch)) {
             return;
         }
@@ -864,10 +872,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         PatchState state = patch.getState(this);
         if (state == PatchState.ENABLED) {
-            setPatchEnabled(patch, false);
+            setPatchEnabled(patch, false, true);
         }
         else if (state == PatchState.DISABLED) {
-            setPatchEnabled(patch, true);
+            setPatchEnabled(patch, true, true);
         }
         else {
             showConflict(patch, state);
@@ -879,23 +887,18 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (patch == null || !canEditPatches()) {
             return;
         }
-        PatchState state = patch.getState(this);
-        if (state == PatchState.ENABLED) {
-            setPatchEnabled(patch, false);
-        }
-        else if (state == PatchState.DISABLED) {
-            setPatchEnabled(patch, true);
-        }
-        else {
-            showConflict(patch, state);
-        }
+        togglePatch(patch, true);
     }
 
     void setPatchEnabled(Patch patch, boolean enabled) {
+        setPatchEnabled(patch, enabled, false);
+    }
+
+    private void setPatchEnabled(Patch patch, boolean enabled, boolean focusPatchManager) {
         if (!canEditPatches() || patch == null) {
             return;
         }
-        setPatchesEnabled(List.of(patch), enabled, true);
+        setPatchesEnabled(List.of(patch), enabled, true, focusPatchManager ? patch : null);
     }
 
     void setAllPatchesEnabled(boolean enabled) {
@@ -916,10 +919,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 targets.add(patch);
             }
         }
-        setPatchesEnabled(targets, enabled, true);
+        setPatchesEnabled(targets, enabled, true, null);
     }
 
-    private void setPatchesEnabled(List<Patch> targets, boolean enabled, boolean addToSet) {
+    private void setPatchesEnabled(List<Patch> targets, boolean enabled, boolean addToSet, Patch focusPatch) {
         if (targets.isEmpty()) {
             return;
         }
@@ -987,6 +990,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (!committed) {
             busy = false;
             provider.refreshTable();
+            if (focusPatch != null) {
+                provider.selectPatch(focusPatch);
+                provider.focusTable();
+            }
             return;
         }
 
@@ -1014,9 +1021,20 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (mergedRanges.isEmpty()) {
             busy = false;
             refreshProvider();
+            if (focusPatch != null && activeProgram == program) {
+                provider.selectPatch(focusPatch);
+                goTo(focusPatch.address);
+                provider.focusTable();
+            }
             provider.setStatus((enabled ? "Enabled " : "Disabled ") + targets.size() + " patch"
                     + (targets.size() == 1 ? "" : "es") + ".");
             return;
+        }
+
+        if (focusPatch != null) {
+            provider.selectPatch(focusPatch);
+            goTo(focusPatch.address);
+            provider.focusTable();
         }
 
         Program programAtSchedule = program;
@@ -1047,13 +1065,13 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 finally {
                     boolean finalSuccess = success;
                     javax.swing.SwingUtilities.invokeLater(() ->
-                            finishReassembly(programAtSchedule, enabled, targets.size(), finalSuccess));
+                            finishReassembly(programAtSchedule, enabled, targets.size(), focusPatch, finalSuccess));
                 }
             }
         }, programAtSchedule);
     }
 
-    private void finishReassembly(Program program, boolean enabled, int count, boolean success) {
+    private void finishReassembly(Program program, boolean enabled, int count, Patch focusPatch, boolean success) {
         // The command may finish after the user switches programs.  'busy' is plugin-global,
         // so it must still be cleared even though the completed command belongs to the old
         // program. Refresh whichever program is currently active.
@@ -1067,6 +1085,11 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return;
         }
         refreshProvider();
+        if (focusPatch != null) {
+            provider.selectPatch(focusPatch);
+            goTo(focusPatch.address);
+            provider.focusTable();
+        }
         requestOriginalDisassemblyReconcile();
         if (success) {
             provider.setStatus((enabled ? "Enabled " : "Disabled ") + count + " patch"
@@ -1978,7 +2001,6 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             throw e;
         }
     }
-
 
     void exportPatchSet() {
         if (activeProgram == null) {
