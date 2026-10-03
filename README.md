@@ -35,7 +35,7 @@ Actions are registered as normal Ghidra Docking actions, so their default keybin
 
 | Action | Default | Scope |
 |---|---|---|
-| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P`  &nbsp; | Global |
+| Patch Manager: Show Patch Manager | `Ctrl+Alt+Shift + P`  &nbsp; &nbsp; &nbsp; | Global |
 | Patch Manager: Add Patch | `Ctrl+Alt+Shift + A` | CodeBrowser/program location |
 | Patch Manager: Capture Existing Patch | `Ctrl+Alt+Shift + C` | CodeBrowser/program location |
 | Patch Manager: Toggle Patch At Location | `Ctrl+Alt+Shift + T` | CodeBrowser, only when patch exists at current location |
