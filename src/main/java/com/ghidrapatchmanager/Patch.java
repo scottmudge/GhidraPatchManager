@@ -9,6 +9,7 @@ final class Patch {
     Address address;
     byte[] originalBytes;
     byte[] patchedBytes;
+    String originalDisassembly;
 
     Patch(String name, Address address, byte[] originalBytes, byte[] patchedBytes) {
         this.name = name;
@@ -18,11 +19,19 @@ final class Patch {
     }
 
     PatchState getState(PatchManagerPlugin plugin) {
-        if (plugin == null || plugin.getCurrentProgram() == null) {
+        return plugin == null ? PatchState.MISSING : getState(plugin.getCurrentProgram());
+    }
+
+    PatchState getState(ghidra.program.model.listing.Program program) {
+        if (program == null) {
             return PatchState.MISSING;
         }
         try {
-            byte[] current = plugin.readBytes(address, patchedBytes.length);
+            byte[] current = new byte[patchedBytes.length];
+            int count = program.getMemory().getBytes(address, current);
+            if (count != patchedBytes.length) {
+                return PatchState.MISSING;
+            }
             if (Arrays.equals(current, patchedBytes)) {
                 return PatchState.ENABLED;
             }

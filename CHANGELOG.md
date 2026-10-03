@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0
+- Added optional (enabled by default) original-disassembly PRE comments for enabled patches.
+- Original disassembly is captured from the unpatched instruction stream and shown above the affected instruction, even when the patch changes instruction boundaries or instruction count.
+- Managed original-disassembly comments are removed automatically when a patch is disabled or deleted, while unrelated PRE comments are preserved.
+- Existing enabled patches are migrated automatically on program activation by temporarily restoring their original bytes, capturing and re-disassembling the original instruction stream, then restoring the patched bytes.
+- Added a gold/yellow background marker for original-disassembly comments; it follows the current instruction containing the patch address.
+- Added **Show Original Disassembly Comments** under **Edit -> Tool Options -> Ghidra Patch Manager**.
+- Original disassembly is persisted in program patch data and exported/imported patch sets; old patch data remains compatible because the new property is optional.
+
 ## 1.2.1
 - Better patch editing, allowing editing of patches regardless of enabled/disabled status.
 

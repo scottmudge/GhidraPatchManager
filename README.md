@@ -20,6 +20,8 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - The same state-colored patch ranges are registered with Ghidra's `MarkerService`, which also makes their locations available in marker-capable connected views such as the Bytes viewer. Ghidra 12.1.x does not expose the CodeBrowser's marker-backed background model for individual byte cells, so this does not replace the Bytes viewer's own cell renderer.
 - Patch state is persisted inside the Ghidra program database.
 - Export/import patch sets as simple Java-Properties text files suitable for version control.
+- **Original disassembly comments:** when enabled (the default), every enabled patch gets a managed **PRE comment** above the current instruction containing the patch. The comment records the original disassembly before the patch, including all original instructions covered by the patch. This remains correct even when the patched bytes decode into a different number of instructions.
+- Original-disassembly comments use a distinct gold/yellow background and are automatically removed when the patch is disabled or deleted. Unrelated user PRE comments are preserved.
 - Conflict detection: a patch is only toggled when the current bytes exactly match either its stored original or patched bytes.
 - Fixed-length, non-overlapping patches keep toggling deterministic.
 
@@ -46,6 +48,14 @@ Actions are registered as normal Ghidra Docking actions, so their default keybin
 The **Toggle Patch At Location** and **Patch Info At Location** actions deliberately do nothing when the current CodeBrowser location is not inside a managed patch. This includes patches where the cursor is in the middle of the patch, not only exactly at its start address.
 
 The manager's **Edit Patch**, **Delete Patch**, **Enable All**, **Disable All**, and **Patch Info** actions are context-sensitive because they operate on the Patch Manager provider rather than arbitrary CodeBrowser locations. Ghidra's Key Bindings configuration can be used to assign different combinations when desired.
+
+## Original disassembly comments
+
+The **Show Original Disassembly Comments** option is enabled by default under `Edit -> Tool Options -> Ghidra Patch Manager`. When an enabled patch has captured original disassembly, the extension stores it as a managed `PRE` comment anchored to the instruction that currently contains the patch start. `PRE` comments appear above the instruction, so the annotation does not depend on patched/original instruction line counts matching.
+
+The managed comment is tagged with the patch address, allowing Patch Manager to remove or refresh only its own block while retaining unrelated user-authored PRE comment text at the same instruction. The original-disassembly marker uses a separate gold/yellow background.
+
+For legacy enabled patches that predate this feature, the extension performs a one-time background migration when the program is activated. It temporarily writes the stored original bytes, re-disassembles the local affected ranges, records the original instruction text, restores the patched bytes, re-disassembles, and then adds the managed comments. Patch operations remain unavailable while that migration is in progress.
 
 ## Building
 
@@ -86,6 +96,14 @@ The plugin intentionally does not silently overwrite a location whose current by
 ## Notes
 
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 21**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
+
+---
+
+## 1.3.0 Changes
+
+- Added optional original-disassembly PRE comments, enabled by default.
+- Added automatic migration for already-enabled patches that lack captured original disassembly.
+- Persisted captured original disassembly in program state and patch-set exports/imports.
 
 ## 1.2.1 Changes
 

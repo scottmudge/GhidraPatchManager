@@ -34,6 +34,7 @@ final class PatchHighlightManager {
     private static final String OPTIONS_CATEGORY = "Ghidra Patch Manager";
     private static final String ENABLED_MARKER_NAME = "Ghidra Patch Manager - Enabled";
     private static final String DISABLED_MARKER_NAME = "Ghidra Patch Manager - Disabled";
+    private static final String ORIGINAL_MARKER_NAME = "Ghidra Patch Manager - Original Disassembly";
     private static final String MARKER_DESCRIPTION = "Managed binary patch state";
 
     // Dark-theme colors keep the light foreground used by CodeBrowser readable.
@@ -43,6 +44,13 @@ final class PatchHighlightManager {
     // Light-theme colors keep the dark CodeBrowser foreground readable.
     private static final Color LIGHT_ENABLED = new Color(242, 202, 151);
     private static final Color LIGHT_DISABLED = new Color(221, 210, 235);
+
+    // There's an issue with the original highlight color overriding the first line of the new disassembly, let's
+    // just inherit the existing enabled colors
+    private static final Color DARK_ORIGINAL = PatchHighlightManager.DARK_ENABLED;
+    private static final Color LIGHT_ORIGINAL = PatchHighlightManager.LIGHT_ENABLED;
+    // private static final Color DARK_ORIGINAL = new Color(121, 92, 28);
+    // private static final Color LIGHT_ORIGINAL = new Color(246, 222, 139);
 
     private final PatchManagerPlugin plugin;
     private final PluginTool tool;
@@ -69,6 +77,7 @@ final class PatchHighlightManager {
     private Program activeProgram;
     private MarkerSet enabledMarkerSet;
     private MarkerSet disabledMarkerSet;
+    private MarkerSet originalMarkerSet;
     private boolean disposed;
 
     PatchHighlightManager(PatchManagerPlugin plugin, PluginTool tool) {
@@ -141,6 +150,20 @@ final class PatchHighlightManager {
         }
 
         try {
+            Listing listing = program.getListing();
+
+            if (plugin.isOriginalDisassemblyCommentsEnabled()) {
+                originalMarkerSet = markerService.createAreaMarker(
+                    ORIGINAL_MARKER_NAME,
+                    "Ghidra Patch Manager original disassembly comment",
+                    program,
+                    MarkerService.HIGHLIGHT_PRIORITY - 1,
+                    true,
+                    true,
+                    true,
+                    originalColor());
+            }
+
             enabledMarkerSet = markerService.createAreaMarker(
                 ENABLED_MARKER_NAME,
                 MARKER_DESCRIPTION + " (enabled)",
@@ -169,6 +192,14 @@ final class PatchHighlightManager {
 
                 PatchState state = patch.getState(plugin);
                 if (state == PatchState.ENABLED) {
+                    if (originalMarkerSet != null && plugin.hasOriginalDisassembly(patch)) {
+                        Instruction anchor = listing.getInstructionContaining(patch.address);
+                        AddressSet commentRange = anchor == null
+                            ? new AddressSet(patch.address, patch.address)
+                            : new AddressSet(anchor.getMinAddress(), anchor.getMinAddress());
+                        originalMarkerSet.add(commentRange);
+                    }
+
                     enabledMarkerSet.add(highlightRange);
                 }
                 else if (state == PatchState.DISABLED) {
@@ -224,6 +255,10 @@ final class PatchHighlightManager {
         return Gui.isDarkTheme() ? DARK_DISABLED : LIGHT_DISABLED;
     }
 
+    private Color originalColor() {
+        return Gui.isDarkTheme() ? DARK_ORIGINAL : LIGHT_ORIGINAL;
+    }
+
     private void clearMarkers() {
         Program program = activeProgram;
         if (program != null) {
@@ -232,6 +267,7 @@ final class PatchHighlightManager {
         else {
             enabledMarkerSet = null;
             disabledMarkerSet = null;
+            originalMarkerSet = null;
         }
     }
 
@@ -248,6 +284,10 @@ final class PatchHighlightManager {
         if (disabledMarkerSet != null) {
             markerService.removeMarker(disabledMarkerSet, program);
             disabledMarkerSet = null;
+        }
+        if (originalMarkerSet != null) {
+            markerService.removeMarker(originalMarkerSet, program);
+            originalMarkerSet = null;
         }
     }
 }

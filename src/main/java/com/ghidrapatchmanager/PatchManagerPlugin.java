@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -31,6 +32,8 @@ import ghidra.framework.cmd.BackgroundCommand;
 import ghidra.framework.model.DomainObjectChangedEvent;
 import ghidra.framework.model.DomainObjectListener;
 import ghidra.framework.options.Options;
+import ghidra.framework.options.OptionsChangeListener;
+import ghidra.framework.options.ToolOptions;
 import ghidra.framework.plugintool.PluginInfo;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.framework.plugintool.util.PluginStatus;
@@ -38,6 +41,8 @@ import ghidra.program.database.mem.AddressSourceInfo;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
+import ghidra.program.model.listing.CodeUnit;
+import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
@@ -62,6 +67,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private static final int FORMAT_VERSION = 1;
     private static final int HOTKEY_MODIFIERS = java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.ALT_DOWN_MASK;
     private static final int HOTKEY_SHIFT_MODIFIERS = HOTKEY_MODIFIERS | java.awt.event.InputEvent.SHIFT_DOWN_MASK;
+    private static final String ORIGINAL_DISASSEMBLY_OPTION = "Show Original Disassembly Comments";
+    private static final String ORIGINAL_COMMENT_PREFIX = "[Original disassembly @ ";
+    private static final String ORIGINAL_COMMENT_SUFFIX = "]";
+    private static final String ORIGINAL_COMMENT_END_PREFIX = "[/Original disassembly @ ";
 
     private final AtomicBoolean refreshPending = new AtomicBoolean();
     private final List<DockingAction> registeredActions = new ArrayList<>();
@@ -74,6 +83,17 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private boolean busy;
     private boolean internalChange;
     private PatchHighlightManager highlightManager;
+    private ToolOptions patchToolOptions;
+    private boolean originalDisassemblyReconcilePending;
+
+    private final OptionsChangeListener patchToolOptionsListener = new OptionsChangeListener() {
+        @Override
+        public void optionsChanged(ToolOptions options, String optionName, Object oldValue, Object newValue) {
+            if (options == patchToolOptions && ORIGINAL_DISASSEMBLY_OPTION.equals(optionName)) {
+                requestOriginalDisassemblyReconcile();
+            }
+        }
+    };
 
     public PatchManagerPlugin(PluginTool tool) {
         super(tool);
@@ -83,6 +103,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     protected void init() {
         super.init();
         provider = new PatchManagerProvider(tool, this);
+        patchToolOptions = tool.getOptions(OPTION_PATH);
+        patchToolOptions.registerOption(ORIGINAL_DISASSEMBLY_OPTION, Boolean.TRUE, null,
+                "Show a gold-highlighted PRE comment containing the original disassembly for enabled patches.");
+        patchToolOptions.addOptionsChangeListener(patchToolOptionsListener);
         highlightManager = new PatchHighlightManager(this, tool);
         tool.addComponentProvider(provider, false);
         patchInfoDialog = new PatchInfoDialog(this);
@@ -201,6 +225,11 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
 
     @Override
     protected void dispose() {
+        originalDisassemblyReconcilePending = false;
+        if (patchToolOptions != null) {
+            patchToolOptions.removeOptionsChangeListener(patchToolOptionsListener);
+            patchToolOptions = null;
+        }
         if (activeProgram != null) {
             activeProgram.removeListener(this);
         }
@@ -234,6 +263,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
         refreshProvider();
         clearPatchInfoOnProgramSwitch();
+        requestOriginalDisassemblyReconcile();
     }
 
     @Override
@@ -286,6 +316,14 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     @Override
     public Program getCurrentProgram() {
         return activeProgram;
+    }
+
+    boolean isOriginalDisassemblyCommentsEnabled() {
+        return patchToolOptions == null || patchToolOptions.getBoolean(ORIGINAL_DISASSEMBLY_OPTION, true);
+    }
+
+    boolean hasOriginalDisassembly(Patch patch) {
+        return patch != null && patch.originalDisassembly != null && !patch.originalDisassembly.isBlank();
     }
 
     boolean canEditPatches() {
@@ -556,6 +594,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         saveToProgram();
         refreshProvider();
         provider.selectPatch(patch);
+        requestOriginalDisassemblyReconcile();
         provider.setStatus("Captured existing patch at " + patch.address);
     }
 
@@ -653,6 +692,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         internalChange = true;
         int tx = program.startTransaction("Edit Ghidra patch");
         try {
+            removeOriginalDisassemblyComment(program, patch);
             if (reassemblyRange != null) {
                 program.getListing().clearCodeUnits(
                     reassemblyRange.start(),
@@ -748,12 +788,17 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     }
 
     private void finishPatchEditReassembly(Program program, boolean enabled, boolean success) {
+        boolean pending = originalDisassemblyReconcilePending;
         busy = false;
         if (activeProgram != program) {
             refreshProvider();
+            if (pending) {
+                requestOriginalDisassemblyReconcile();
+            }
             return;
         }
         refreshProvider();
+        requestOriginalDisassemblyReconcile();
         if (success) {
             Patch selected = provider.getSelectedPatch();
             String name = selected == null ? "" : " '" + selected.name + "'";
@@ -860,17 +905,31 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         internalChange = true;
         boolean committed = false;
         List<ReassemblyRange> reassemblyRanges = new ArrayList<>();
-        int tx = activeProgram.startTransaction((enabled ? "Enable " : "Disable ") + " Ghidra patches");
+        Program program = activeProgram;
+        int tx = program.startTransaction((enabled ? "Enable " : "Disable ") + " Ghidra patches");
         try {
+            if (enabled && isOriginalDisassemblyCommentsEnabled()) {
+                for (Patch patch : targets) {
+                    if (!hasOriginalDisassembly(patch)) {
+                        String captured = captureOriginalDisassembly(program, patch);
+                        if (captured != null) {
+                            patch.originalDisassembly = captured;
+                        }
+                    }
+                }
+            }
             for (Patch patch : targets) {
-                ReassemblyRange range = prepareReassembly(patch.address, patch.getEndAddress());
+                if (!enabled) {
+                    removeOriginalDisassemblyComment(program, patch);
+                }
+                ReassemblyRange range = prepareReassembly(program, patch.address, patch.getEndAddress());
                 if (range != null) {
                     reassemblyRanges.add(range);
-                    activeProgram.getListing().clearCodeUnits(range.start(), range.end(), false,
+                    program.getListing().clearCodeUnits(range.start(), range.end(), false,
                             TaskMonitor.DUMMY);
                 }
                 byte[] bytes = enabled ? patch.patchedBytes : patch.originalBytes;
-                activeProgram.getMemory().setBytes(patch.address, bytes);
+                program.getMemory().setBytes(patch.address, bytes);
             }
             committed = true;
         }
@@ -917,7 +976,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             return;
         }
 
-        Program programAtSchedule = activeProgram;
+        Program programAtSchedule = program;
         tool.executeBackgroundCommand(new BackgroundCommand<Program>(
                 "Re-disassemble Ghidra patches", true, false, false) {
             @Override
@@ -957,12 +1016,17 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         // The command may finish after the user switches programs.  'busy' is plugin-global,
         // so it must still be cleared even though the completed command belongs to the old
         // program. Refresh whichever program is currently active.
+        boolean pending = originalDisassemblyReconcilePending;
         busy = false;
         if (activeProgram != program) {
             refreshProvider();
+            if (pending) {
+                requestOriginalDisassemblyReconcile();
+            }
             return;
         }
         refreshProvider();
+        requestOriginalDisassemblyReconcile();
         if (success) {
             provider.setStatus((enabled ? "Enabled " : "Disabled ") + count + " patch"
                     + (count == 1 ? "" : "es") + ".");
@@ -1054,15 +1118,438 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         return a.address.compareTo(b.getEndAddress()) <= 0 && b.address.compareTo(a.getEndAddress()) <= 0;
     }
 
+    private void requestOriginalDisassemblyReconcile() {
+        if (activeProgram == null) {
+            if (highlightManager != null) {
+                highlightManager.refresh();
+            }
+            return;
+        }
+        if (busy) {
+            originalDisassemblyReconcilePending = true;
+            return;
+        }
+        originalDisassemblyReconcilePending = false;
+
+        if (!isOriginalDisassemblyCommentsEnabled()) {
+            removeAllOriginalDisassemblyComments(activeProgram);
+            if (highlightManager != null) {
+                highlightManager.refresh();
+            }
+            return;
+        }
+
+        List<Patch> missing = new ArrayList<>();
+        for (Patch patch : patches) {
+            if (patch.getState(this) == PatchState.ENABLED && !hasOriginalDisassembly(patch)) {
+                missing.add(patch);
+            }
+        }
+        if (!missing.isEmpty()) {
+            startOriginalDisassemblyMigration(activeProgram, missing, new ArrayList<>(patches));
+            return;
+        }
+        applyOriginalDisassemblyComments(activeProgram);
+    }
+
+    private void applyOriginalDisassemblyComments(Program program) {
+        if (program == null || program != activeProgram || !isOriginalDisassemblyCommentsEnabled()) {
+            return;
+        }
+        int tx = program.startTransaction("Update original patch comments");
+        try {
+            for (Patch patch : patches) {
+                if (patch.getState(this) == PatchState.ENABLED && hasOriginalDisassembly(patch)) {
+                    setOriginalDisassemblyComment(program, patch);
+                }
+                else {
+                    removeOriginalDisassemblyComment(program, patch);
+                }
+            }
+            writePatchProperties(program);
+            program.endTransaction(tx, true);
+        }
+        catch (RuntimeException e) {
+            program.endTransaction(tx, false);
+            Msg.error(this, "Unable to update original disassembly comments", e);
+        }
+        if (highlightManager != null) {
+            highlightManager.refresh();
+        }
+    }
+
+    private void removeAllOriginalDisassemblyComments(Program program) {
+        if (program == null) {
+            return;
+        }
+        int tx = program.startTransaction("Remove original patch comments");
+        try {
+            for (Patch patch : patches) {
+                removeOriginalDisassemblyComment(program, patch);
+            }
+            program.endTransaction(tx, true);
+        }
+        catch (RuntimeException e) {
+            program.endTransaction(tx, false);
+            Msg.error(this, "Unable to remove original disassembly comments", e);
+        }
+    }
+
+    private String captureOriginalDisassembly(Program program, Patch patch) {
+        if (program == null || patch == null) {
+            return null;
+        }
+        try {
+            Address end = patch.address.add(patch.originalBytes.length - 1L);
+            Listing listing = program.getListing();
+            Instruction current = listing.getInstructionContaining(patch.address);
+            if (current == null) {
+                current = listing.getInstructionAt(patch.address);
+            }
+            if (current == null) {
+                return null;
+            }
+
+            List<String> lines = new ArrayList<>();
+            while (current != null
+                    && current.getMinAddress().getAddressSpace().equals(patch.address.getAddressSpace())
+                    && current.getMinAddress().compareTo(end) <= 0) {
+                lines.add("    " + current.getMinAddress() + "  " + current);
+                if (current.getMaxAddress().compareTo(end) >= 0) {
+                    break;
+                }
+                Instruction next = listing.getInstructionAfter(current.getMaxAddress());
+                if (next == null) {
+                    break;
+                }
+                current = next;
+            }
+            return lines.isEmpty() ? null : String.join("\n", lines);
+        }
+        catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private boolean setOriginalDisassemblyComment(Program program, Patch patch) {
+        if (program == null || patch == null || !hasOriginalDisassembly(patch)) {
+            return false;
+        }
+        CodeUnit codeUnit = getOriginalCommentCodeUnit(program, patch);
+        if (codeUnit == null) {
+            return false;
+        }
+
+        String existing = codeUnit.getComment(CommentType.PRE);
+        String managed = buildOriginalDisassemblyComment(patch);
+        String replacement = removeManagedOriginalComment(existing, patch);
+        if (replacement == null || replacement.isBlank()) {
+            replacement = managed;
+        }
+        else {
+            replacement = replacement + "\n\n" + managed;
+        }
+        if (Objects.equals(existing, replacement)) {
+            return false;
+        }
+        codeUnit.setComment(CommentType.PRE, replacement);
+        return true;
+    }
+
+    private boolean removeOriginalDisassemblyComment(Program program, Patch patch) {
+        if (program == null || patch == null) {
+            return false;
+        }
+        CodeUnit codeUnit = getOriginalCommentCodeUnit(program, patch);
+        if (codeUnit == null) {
+            return false;
+        }
+        String existing = codeUnit.getComment(CommentType.PRE);
+        if (existing == null) {
+            return false;
+        }
+        String replacement = removeManagedOriginalComment(existing, patch);
+        if (Objects.equals(existing, replacement)) {
+            return false;
+        }
+        codeUnit.setComment(CommentType.PRE, replacement == null || replacement.isBlank() ? null : replacement);
+        return true;
+    }
+
+    private CodeUnit getOriginalCommentCodeUnit(Program program, Patch patch) {
+        Listing listing = program.getListing();
+        Instruction instruction = listing.getInstructionContaining(patch.address);
+        if (instruction != null) {
+            return instruction;
+        }
+        return listing.getCodeUnitAt(patch.address);
+    }
+
+    private static String buildOriginalDisassemblyComment(Patch patch) {
+        return originalCommentStart(patch) + "\n" + patch.originalDisassembly
+                + "\n" + originalCommentEnd(patch);
+    }
+
+    private static String originalCommentStart(Patch patch) {
+        return ORIGINAL_COMMENT_PREFIX + patch.address + ORIGINAL_COMMENT_SUFFIX;
+    }
+
+    private static String originalCommentEnd(Patch patch) {
+        return ORIGINAL_COMMENT_END_PREFIX + patch.address + ORIGINAL_COMMENT_SUFFIX;
+    }
+
+    private static String removeManagedOriginalComment(String comment, Patch patch) {
+        if (comment == null || comment.isEmpty()) {
+            return comment;
+        }
+        String start = originalCommentStart(patch);
+        String end = originalCommentEnd(patch);
+        String[] lines = comment.split("\n", -1);
+        List<String> kept = new ArrayList<>();
+        boolean removing = false;
+        boolean found = false;
+        for (String line : lines) {
+            if (!removing && line.equals(start)) {
+                removing = true;
+                found = true;
+                continue;
+            }
+            if (removing) {
+                if (line.equals(end)) {
+                    removing = false;
+                }
+                continue;
+            }
+            kept.add(line);
+        }
+        if (!found || removing) {
+            return comment;
+        }
+        while (!kept.isEmpty() && kept.get(0).isBlank()) {
+            kept.remove(0);
+        }
+        while (!kept.isEmpty() && kept.get(kept.size() - 1).isBlank()) {
+            kept.remove(kept.size() - 1);
+        }
+        return String.join("\n", kept);
+    }
+
+    private void startOriginalDisassemblyMigration(Program program, List<Patch> missing, List<Patch> patchSnapshot) {
+        if (program == null || missing.isEmpty()) {
+            return;
+        }
+        busy = true;
+        internalChange = true;
+        tool.executeBackgroundCommand(new BackgroundCommand<Program>(
+                "Capture original patch disassembly", true, false, false) {
+            @Override
+            public boolean applyTo(Program targetProgram, TaskMonitor monitor) {
+                boolean success = true;
+                boolean originalsWritten = false;
+                List<ReassemblyRange> ranges = new ArrayList<>();
+                try {
+                    for (Patch patch : missing) {
+                        if (monitor.isCancelled()) {
+                            return false;
+                        }
+                        ReassemblyRange range = prepareReassembly(targetProgram, patch.address, patch.getEndAddress());
+                        if (range != null) {
+                            ranges.add(range);
+                        }
+                    }
+                    List<ReassemblyRange> merged = mergeRanges(ranges);
+
+                    int tx = targetProgram.startTransaction("Temporarily restore original patches");
+                    try {
+                        for (Patch patch : missing) {
+                            removeOriginalDisassemblyComment(targetProgram, patch);
+                        }
+                        for (ReassemblyRange range : merged) {
+                            targetProgram.getListing().clearCodeUnits(range.start(), range.end(), false,
+                                    TaskMonitor.DUMMY);
+                        }
+                        for (Patch patch : missing) {
+                            targetProgram.getMemory().setBytes(patch.address, patch.originalBytes);
+                        }
+                        originalsWritten = true;
+                        targetProgram.endTransaction(tx, true);
+                    }
+                    catch (Exception e) {
+                        targetProgram.endTransaction(tx, false);
+                        throw new RuntimeException(e);
+                    }
+
+                    for (ReassemblyRange range : merged) {
+                        if (monitor.isCancelled()) {
+                            return false;
+                        }
+                        DisassembleCommand command = new DisassembleCommand(range.start(),
+                                new AddressSet(range.start(), range.end()), true);
+                        command.enableCodeAnalysis(true);
+                        if (!command.applyTo(targetProgram, monitor)) {
+                            success = false;
+                        }
+                    }
+
+                    int captured = 0;
+                    for (Patch patch : missing) {
+                        String value = captureOriginalDisassembly(targetProgram, patch);
+                        if (value != null) {
+                            patch.originalDisassembly = value;
+                            captured++;
+                        }
+                    }
+
+                    int tx2 = targetProgram.startTransaction("Restore enabled patches after capture");
+                    try {
+                        for (ReassemblyRange range : merged) {
+                            targetProgram.getListing().clearCodeUnits(range.start(), range.end(), false,
+                                    TaskMonitor.DUMMY);
+                        }
+                        for (Patch patch : missing) {
+                            targetProgram.getMemory().setBytes(patch.address, patch.patchedBytes);
+                        }
+                        targetProgram.endTransaction(tx2, true);
+                    }
+                    catch (Exception e) {
+                        targetProgram.endTransaction(tx2, false);
+                        throw new RuntimeException(e);
+                    }
+
+                    for (ReassemblyRange range : merged) {
+                        if (monitor.isCancelled()) {
+                            return false;
+                        }
+                        DisassembleCommand command = new DisassembleCommand(range.start(),
+                                new AddressSet(range.start(), range.end()), true);
+                        command.enableCodeAnalysis(true);
+                        if (!command.applyTo(targetProgram, monitor)) {
+                            success = false;
+                        }
+                    }
+
+                    int tx3 = targetProgram.startTransaction("Store original patch disassembly");
+                    try {
+                        for (Patch patch : patchSnapshot) {
+                            if (isOriginalDisassemblyCommentsEnabled()
+                                    && patch.getState(targetProgram) == PatchState.ENABLED
+                                    && hasOriginalDisassembly(patch)) {
+                                setOriginalDisassemblyComment(targetProgram, patch);
+                            }
+                            else {
+                                removeOriginalDisassemblyComment(targetProgram, patch);
+                            }
+                        }
+                        writePatchProperties(targetProgram, patchSnapshot);
+                        targetProgram.endTransaction(tx3, true);
+                    }
+                    catch (Exception e) {
+                        targetProgram.endTransaction(tx3, false);
+                        throw new RuntimeException(e);
+                    }
+
+                    final int capturedFinal = captured;
+                    final boolean successFinal = success;
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            finishOriginalDisassemblyMigration(program, successFinal, capturedFinal, missing.size()));
+                    return success;
+                }
+                catch (RuntimeException e) {
+                    success = false;
+                    Msg.error(PatchManagerPlugin.this,
+                            "Unable to capture original disassembly for existing patches", e);
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            finishOriginalDisassemblyMigration(program, false, 0, missing.size()));
+                    return false;
+                }
+                finally {
+                    if (!success && originalsWritten) {
+                        restorePatchedBytesAfterMigration(targetProgram, missing, ranges);
+                    }
+                }
+            }
+        }, program);
+    }
+
+    private void restorePatchedBytesAfterMigration(Program program, List<Patch> missing,
+            List<ReassemblyRange> ranges) {
+        try {
+            int tx = program.startTransaction("Restore patches after original disassembly capture failure");
+            try {
+                for (ReassemblyRange range : mergeRanges(ranges)) {
+                    program.getListing().clearCodeUnits(range.start(), range.end(), false, TaskMonitor.DUMMY);
+                }
+                for (Patch patch : missing) {
+                    program.getMemory().setBytes(patch.address, patch.patchedBytes);
+                }
+                program.endTransaction(tx, true);
+            }
+            catch (Exception e) {
+                program.endTransaction(tx, false);
+                throw new RuntimeException(e);
+            }
+            for (ReassemblyRange range : mergeRanges(ranges)) {
+                DisassembleCommand command = new DisassembleCommand(range.start(),
+                        new AddressSet(range.start(), range.end()), true);
+                command.enableCodeAnalysis(true);
+                command.applyTo(program, TaskMonitor.DUMMY);
+            }
+        }
+        catch (RuntimeException e) {
+            Msg.error(this, "Unable to restore enabled patch bytes after migration failure", e);
+        }
+    }
+
+    private void finishOriginalDisassemblyMigration(Program program, boolean success, int captured, int total) {
+        if (activeProgram == program) {
+            refreshProvider();
+            if (success && captured == total) {
+                provider.setStatus("Captured original disassembly for " + total + " enabled patch"
+                        + (total == 1 ? "" : "es") + ".");
+            }
+            else if (captured > 0) {
+                provider.setStatus("Captured original disassembly for " + captured + " of " + total + " patches.");
+            }
+            else {
+                provider.setStatus("Original disassembly capture did not complete.");
+            }
+        }
+        boolean pending = originalDisassemblyReconcilePending;
+        busy = false;
+        originalDisassemblyReconcilePending = false;
+        if (activeProgram != program) {
+            if (pending) {
+                requestOriginalDisassemblyReconcile();
+            }
+            else if (highlightManager != null) {
+                highlightManager.refresh();
+            }
+            return;
+        }
+        if (pending) {
+            requestOriginalDisassemblyReconcile();
+        }
+        else if (highlightManager != null) {
+            highlightManager.refresh();
+        }
+    }
+
     private ReassemblyRange prepareReassembly(Address address, Address end) {
-        Listing listing = activeProgram.getListing();
+        return prepareReassembly(activeProgram, address, end);
+    }
+
+    private ReassemblyRange prepareReassembly(Program program, Address address, Address end) {
+        if (program == null || address == null || end == null) {
+            return null;
+        }
+        Listing listing = program.getListing();
         Instruction first = listing.getInstructionContaining(address);
         Instruction last = listing.getInstructionContaining(end);
         if (first == null && last == null) {
             // If the user is patching undefined executable bytes, give Ghidra a chance to decode
             // them as well. This is still restricted to a small local range rather than the
             // whole program.
-            if (!activeProgram.getMemory().getExecuteSet().contains(address)) {
+            if (!program.getMemory().getExecuteSet().contains(address)) {
                 return null;
             }
         }
@@ -1073,8 +1560,8 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         // instruction's decoded length, so include a small executable look-ahead region. This
         // lets the normal disassembler resynchronise and recreate immediately following code.
         try {
-            MemoryBlock block = activeProgram.getMemory().getBlock(finish);
-            if (block != null && activeProgram.getMemory().getExecuteSet().contains(finish)) {
+            MemoryBlock block = program.getMemory().getBlock(finish);
+            if (block != null && program.getMemory().getExecuteSet().contains(finish)) {
                 Address lookAhead = finish.add(16);
                 if (lookAhead.compareTo(block.getEnd()) > 0) {
                     lookAhead = block.getEnd();
@@ -1108,9 +1595,21 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 remove.add(p);
             }
         }
+        int commentTx = activeProgram.startTransaction("Remove Ghidra Patch Manager comments");
+        try {
+            for (Patch patch : remove) {
+                removeOriginalDisassemblyComment(activeProgram, patch);
+            }
+            activeProgram.endTransaction(commentTx, true);
+        }
+        catch (RuntimeException e) {
+            activeProgram.endTransaction(commentTx, false);
+            throw e;
+        }
         patches.removeAll(remove);
         saveToProgram();
         refreshProvider();
+        requestOriginalDisassemblyReconcile();
     }
 
     void jumpToSelectedPatch() {
@@ -1177,6 +1676,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 String nameEncoded = props.getProperty("patch." + i + ".name");
                 String originalText = props.getProperty("patch." + i + ".original");
                 String patchedText = props.getProperty("patch." + i + ".patched");
+                String originalDisassemblyEncoded = props.getProperty("patch." + i + ".originalDisassembly");
                 if (addressText == null || nameEncoded == null || originalText == null || patchedText == null) {
                     continue;
                 }
@@ -1188,6 +1688,15 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 byte[] original = HexUtil.parse(originalText);
                 byte[] patched = HexUtil.parse(patchedText);
                 Patch patch = new Patch(name, address, original, patched);
+                if (originalDisassemblyEncoded != null && !originalDisassemblyEncoded.isBlank()) {
+                    try {
+                        patch.originalDisassembly = new String(
+                                Base64.getDecoder().decode(originalDisassemblyEncoded), StandardCharsets.UTF_8);
+                    }
+                    catch (IllegalArgumentException e) {
+                        Msg.warn(this, "Ignoring invalid stored original disassembly for patch '" + name + "'.");
+                    }
+                }
                 if (validateStoredPatch(program, patch)) {
                     patches.add(patch);
                 }
@@ -1219,32 +1728,14 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (activeProgram == null) {
             return;
         }
-        Properties props = new Properties();
-        props.setProperty("format", FORMAT);
-        props.setProperty("version", Integer.toString(FORMAT_VERSION));
-        props.setProperty("count", Integer.toString(patches.size()));
-        for (int i = 0; i < patches.size(); i++) {
-            Patch p = patches.get(i);
-            props.setProperty("patch." + i + ".name", Base64.getEncoder().encodeToString(p.name.getBytes(StandardCharsets.UTF_8)));
-            props.setProperty("patch." + i + ".address", p.address.toString());
-            props.setProperty("patch." + i + ".original", HexUtil.format(p.originalBytes));
-            props.setProperty("patch." + i + ".patched", HexUtil.format(p.patchedBytes));
+        int tx = activeProgram.startTransaction("Save Patch Manager state");
+        try {
+            writePatchProperties(activeProgram);
+            activeProgram.endTransaction(tx, true);
         }
-        try (StringWriter sw = new StringWriter()) {
-            props.store(sw, "Ghidra Patch Manager patch definitions");
-            Options options = activeProgram.getOptions(OPTION_PATH);
-            int tx = activeProgram.startTransaction("Save Patch Manager state");
-            try {
-                options.setString(OPTION_DATA, sw.toString());
-                activeProgram.endTransaction(tx, true);
-            }
-            catch (RuntimeException e) {
-                activeProgram.endTransaction(tx, false);
-                throw e;
-            }
-        }
-        catch (IOException e) {
-            Msg.error(this, "Unable to serialize patch state", e);
+        catch (RuntimeException e) {
+            activeProgram.endTransaction(tx, false);
+            throw e;
         }
     }
 
@@ -1308,6 +1799,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             patches = imported;
             saveToProgram();
             refreshProvider();
+            requestOriginalDisassemblyReconcile();
             provider.setStatus("Loaded " + patches.size() + " patch" + (patches.size() == 1 ? "" : "es"));
         }
         catch (Exception e) {
@@ -1315,19 +1807,42 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
     }
 
+    private void writePatchProperties(Program program) {
+        writePatchProperties(program, patches);
+    }
+
+    private void writePatchProperties(Program program, List<Patch> sourcePatches) {
+        Properties props = buildPatchProperties(program, sourcePatches);
+        try (StringWriter sw = new StringWriter()) {
+            props.store(sw, "Ghidra Patch Manager patch definitions");
+            program.getOptions(OPTION_PATH).setString(OPTION_DATA, sw.toString());
+        }
+        catch (IOException e) {
+            throw new IllegalStateException("Unable to serialize patch state", e);
+        }
+    }
+
     private Properties buildPatchProperties() {
+        return buildPatchProperties(activeProgram, patches);
+    }
+
+    private Properties buildPatchProperties(Program program, List<Patch> sourcePatches) {
         Properties props = new Properties();
         props.setProperty("format", FORMAT);
         props.setProperty("version", Integer.toString(FORMAT_VERSION));
-        props.setProperty("program", activeProgram == null ? "" : activeProgram.getName());
-        props.setProperty("executable_sha256", activeProgram == null ? "" : activeProgram.getExecutableSHA256());
-        props.setProperty("count", Integer.toString(patches.size()));
-        for (int i = 0; i < patches.size(); i++) {
-            Patch p = patches.get(i);
+        props.setProperty("program", program == null ? "" : program.getName());
+        props.setProperty("executable_sha256", program == null ? "" : program.getExecutableSHA256());
+        props.setProperty("count", Integer.toString(sourcePatches.size()));
+        for (int i = 0; i < sourcePatches.size(); i++) {
+            Patch p = sourcePatches.get(i);
             props.setProperty("patch." + i + ".name", Base64.getEncoder().encodeToString(p.name.getBytes(StandardCharsets.UTF_8)));
             props.setProperty("patch." + i + ".address", p.address.toString());
             props.setProperty("patch." + i + ".original", HexUtil.format(p.originalBytes));
             props.setProperty("patch." + i + ".patched", HexUtil.format(p.patchedBytes));
+            if (hasOriginalDisassembly(p)) {
+                props.setProperty("patch." + i + ".originalDisassembly",
+                        Base64.getEncoder().encodeToString(p.originalDisassembly.getBytes(StandardCharsets.UTF_8)));
+            }
         }
         return props;
     }
@@ -1351,6 +1866,16 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             Patch p = new Patch(name, address,
                     HexUtil.parse(required(props, "patch." + i + ".original")),
                     HexUtil.parse(required(props, "patch." + i + ".patched")));
+            String originalDisassemblyEncoded = props.getProperty("patch." + i + ".originalDisassembly", "");
+            if (!originalDisassemblyEncoded.isBlank()) {
+                try {
+                    p.originalDisassembly = new String(Base64.getDecoder().decode(originalDisassemblyEncoded),
+                            StandardCharsets.UTF_8);
+                }
+                catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("Invalid original disassembly for imported patch " + i, e);
+                }
+            }
             imported.add(p);
         }
         return imported;
