@@ -93,9 +93,11 @@ Restart Ghidra, then open:
 
 ## How automatic re-disassembly works
 
-When a patch touches an existing instruction, the plugin first expands the patch range to include any instruction containing the first or last patched byte. It clears those code units and writes the new bytes in one program transaction. After the transaction commits, it invokes `DisassembleCommand` on the affected range with flow following and code analysis enabled.
+When a patch touches an existing instruction, the plugin expands the patch range only to include the complete instruction containing the first and last patched bytes. It clears those code units and writes the new bytes in one program transaction. After the transaction commits, it invokes `DisassembleCommand` with that affected range as both its start set and its restricted set, so every newly undefined address in the range can seed disassembly without touching unrelated following instructions.
 
-Undefined executable bytes are also offered to the disassembler, but the operation remains restricted to the patch range instead of triggering a whole-program disassembly.
+This is important when a patch changes instruction boundaries or instruction count. The plugin deliberately does not clear an arbitrary look-ahead region: Ghidra's `clearCodeUnits` operates on complete code units, so a look-ahead range can otherwise undefine an unaffected instruction merely because the range intersects it.
+
+Undefined executable bytes are offered to the disassembler as additional start points, but the operation remains restricted to the patch range instead of triggering a whole-program disassembly.
 
 The plugin intentionally does not silently overwrite a location whose current bytes are neither the stored original bytes nor the stored patched bytes. This protects manual edits and overlapping patch experiments.
 
@@ -104,6 +106,12 @@ The plugin intentionally does not silently overwrite a location whose current by
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 25**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
 ---
+
+## 1.3.1 Changes
+
+- Fixed automatic patch re-disassembly overreach when a patch changes instruction length or instruction count.
+- The code-clear range is now limited to the complete instruction units actually intersecting the patch instead of using an executable 16-byte look-ahead.
+- Re-disassembly seeds the affected range directly so newly undefined bytes such as a trailing NOP after a shortened branch are still decoded automatically.
 
 ## 1.3.0 Changes
 
@@ -131,7 +139,7 @@ The extension should be built against the Ghidra version you intend to use. The 
 
 - Added the **Patch Info** read-only dialog with individually selectable/copyable fields for address, RVA, file offsets, source file, memory block, byte lengths, and other patch metadata.
 - Added selectable byte rendering for hexadecimal, Base64, ASCII, UTF-8, UTF-16, and the Java runtime's available character sets.
-- Added Ghidra DockingAction keybindings for Patch Manager operations.
+- Added Ghidra DockingAction keybindings for Patch Manager actions.
 - Added context-aware CodeBrowser hotkeys for Add, Capture Existing, Toggle-at-location, and Patch Info-at-location.
 
 ## 1.0.3 Changes

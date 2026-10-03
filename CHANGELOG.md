@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1
+- Fixed automatic patch re-disassembly overreach when a patch changes instruction length or instruction count.
+- The code-clear range is now limited to the complete instruction units actually intersecting the patch instead of using an executable 16-byte look-ahead.
+- Re-disassembly seeds the affected range directly so newly undefined bytes such as a trailing NOP after a shortened branch are still decoded automatically.
+
 ## 1.3.0
 - Added optional (enabled by default) original-disassembly PRE comments for enabled patches.
 - Original disassembly is captured from the unpatched instruction stream and shown above the affected instruction, even when the patch changes instruction boundaries or instruction count.
@@ -22,7 +27,7 @@
 - Added the **Highlight Patch Locations** option under **Edit -> Tool Options -> Ghidra Patch Manager**.
 
 ## 1.1.0
-- Added a read-only **Patch Info** window with individually copyable metadata fields.
+- Added a read-only **Patch Info** window with individually selectable/copyable metadata fields.
 - Added file offset/RVA reporting, imported source-file information, memory-block information, and live current-byte display.
 - Added selectable byte renderings for hexadecimal, Base64, ASCII, UTF-8, UTF-16, and available Java charsets.
 - Added normal Ghidra DockingAction keybindings for Patch Manager actions.
@@ -40,7 +45,7 @@
 - Double-clicking the Enabled checkbox no longer also navigates to the patch.
 - Kept patch operations busy until automatic background re-disassembly completes.
 - Prevented stale global busy state when the active program changes during re-disassembly.
-- Coalesced redundant domain-object refresh requests.
+- Coalesced redundant program-change refresh requests.
 - Fixed the Edit Patch edge case where “Apply patch immediately” could be ignored when name and bytes were unchanged.
 - Tightened validation of stored patch definitions.
 

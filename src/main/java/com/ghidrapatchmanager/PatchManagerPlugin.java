@@ -47,7 +47,6 @@ import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.util.ProgramLocation;
 import ghidra.util.HelpLocation;
 import ghidra.util.Msg;
@@ -765,10 +764,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                     if (monitor.isCancelled()) {
                         return false;
                     }
-                    DisassembleCommand command = new DisassembleCommand(
-                            reassemblyRange.start(),
-                            new AddressSet(reassemblyRange.start(), reassemblyRange.end()), true);
-                    command.enableCodeAnalysis(true);
+                    DisassembleCommand command = createReassemblyCommand(reassemblyRange);
                     success = command.applyTo(program, monitor);
                     return success;
                 }
@@ -809,7 +805,6 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
             provider.setStatus("Patch edit applied, but automatic re-disassembly did not complete.");
         }
     }
-
 
     void togglePatchAtModelRow(int modelRow) {
         if (!canEditPatches() || provider == null) {
@@ -988,9 +983,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                             success = false;
                             return false;
                         }
-                        DisassembleCommand command = new DisassembleCommand(range.start(),
-                                new AddressSet(range.start(), range.end()), true);
-                        command.enableCodeAnalysis(true);
+                        DisassembleCommand command = createReassemblyCommand(range);
                         if (!command.applyTo(program, monitor)) {
                             success = false;
                         }
@@ -1383,9 +1376,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                         if (monitor.isCancelled()) {
                             return false;
                         }
-                        DisassembleCommand command = new DisassembleCommand(range.start(),
-                                new AddressSet(range.start(), range.end()), true);
-                        command.enableCodeAnalysis(true);
+                        DisassembleCommand command = createReassemblyCommand(range);
                         if (!command.applyTo(targetProgram, monitor)) {
                             success = false;
                         }
@@ -1420,9 +1411,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                         if (monitor.isCancelled()) {
                             return false;
                         }
-                        DisassembleCommand command = new DisassembleCommand(range.start(),
-                                new AddressSet(range.start(), range.end()), true);
-                        command.enableCodeAnalysis(true);
+                        DisassembleCommand command = createReassemblyCommand(range);
                         if (!command.applyTo(targetProgram, monitor)) {
                             success = false;
                         }
@@ -1489,9 +1478,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 throw new RuntimeException(e);
             }
             for (ReassemblyRange range : mergeRanges(ranges)) {
-                DisassembleCommand command = new DisassembleCommand(range.start(),
-                        new AddressSet(range.start(), range.end()), true);
-                command.enableCodeAnalysis(true);
+                DisassembleCommand command = createReassemblyCommand(range);
                 command.applyTo(program, TaskMonitor.DUMMY);
             }
         }
@@ -1534,6 +1521,20 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         }
     }
 
+    /**
+     * Re-disassemble every currently undefined start point in the affected range, while still
+     * restricting the operation to that same range. Using the range as the start set is important
+     * for patches that turn a conditional branch into an unconditional branch and leave a valid
+     * instruction (for example a NOP) immediately after the patched instruction; a single start
+     * address would otherwise have no flow path into that fall-through byte.
+     */
+    private static DisassembleCommand createReassemblyCommand(ReassemblyRange range) {
+        AddressSet rangeSet = new AddressSet(range.start(), range.end());
+        DisassembleCommand command = new DisassembleCommand(rangeSet, rangeSet, true);
+        command.enableCodeAnalysis(true);
+        return command;
+    }
+
     private ReassemblyRange prepareReassembly(Address address, Address end) {
         return prepareReassembly(activeProgram, address, end);
     }
@@ -1556,22 +1557,11 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         Address start = first != null ? first.getMinAddress() : address;
         Address finish = last != null ? last.getMaxAddress() : end;
 
-        // x86 instructions are variable-length (up to 15 bytes). A byte patch can change an
-        // instruction's decoded length, so include a small executable look-ahead region. This
-        // lets the normal disassembler resynchronise and recreate immediately following code.
-        try {
-            MemoryBlock block = program.getMemory().getBlock(finish);
-            if (block != null && program.getMemory().getExecuteSet().contains(finish)) {
-                Address lookAhead = finish.add(16);
-                if (lookAhead.compareTo(block.getEnd()) > 0) {
-                    lookAhead = block.getEnd();
-                }
-                finish = lookAhead;
-            }
-        }
-        catch (RuntimeException ignored) {
-            // Keep the conservative original end if an address-space boundary is encountered.
-        }
+        // Only clear code units that actually intersect the patch (expanded to the complete
+        // containing instruction boundaries). Do not extend the clear range into otherwise-valid
+        // following instructions: a fixed-length patch can change instruction boundaries, and
+        // clearing an arbitrary look-ahead region would destroy unaffected disassembly. The
+        // subsequent DisassembleCommand is still restricted to this affected range.
         return new ReassemblyRange(start, finish);
     }
 
