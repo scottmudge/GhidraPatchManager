@@ -2,6 +2,8 @@
 
 A Ghidra 12.x extension for managing fixed-length byte patches as first-class, toggleable patch records.
 
+[![Build Ghidra Patch Manager Extension](https://github.com/scottmudge/GhidraPatchManager/actions/workflows/gradle.yml/badge.svg)](https://github.com/scottmudge/GhidraPatchManager/actions/workflows/gradle.yml)
+
 #### Patch Manager UI:
 <img width="779" height="353" alt="image" src="https://github.com/user-attachments/assets/8bad4c06-7832-4b98-97e7-8da505a80a8e" />
 
