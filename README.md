@@ -26,7 +26,7 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - The same state-colored patch ranges are registered with Ghidra's `MarkerService`, which also makes their locations available in marker-capable connected views such as the Bytes viewer. Ghidra 12.1.x does not expose the CodeBrowser's marker-backed background model for individual byte cells, so this does not replace the Bytes viewer's own cell renderer.
 - Patch state is persisted inside the Ghidra program database.
 - Export/import patch sets as simple Java-Properties text files suitable for version control.
-- **Original disassembly comments:** when enabled (the default), every enabled patch gets a managed **PRE comment** above the current instruction containing the patch. The comment records the original disassembly before the patch, including all original instructions covered by the patch. This remains correct even when the patched bytes decode into a different number of instructions.
+- **Original disassembly comments:** the **Show Orig** toggle controls whether every enabled patch gets a managed **PRE comment** above the current instruction containing the patch. The original-disassembly setting under **Edit -> Tool Options -> Ghidra Patch Manager** is named **Show Original Disassembly Comments by Default**, is disabled by default, and supplies the initial state of the **Show Orig** button when the tool starts.
 - Original-disassembly comments use a distinct gold/yellow background and are automatically removed when the patch is disabled or deleted. Unrelated user PRE comments are preserved.
 - **Delete Patch:** the confirmation dialog includes a **Restore original bytes before deleting** checkbox, enabled by default. When enabled, any selected enabled patches are reverted to their stored original bytes, the affected code units are cleared, and the restored ranges are automatically re-disassembled before deletion completes. Managed original-disassembly comments are removed as part of the same deletion operation.
 - **Patch names in comments:** **Show Patch Names in Comments** is enabled by default. Custom patch names are appended to the first line of the managed original-disassembly comment as ` - Patch: <patch name>`. If original-disassembly comments are disabled, the extension instead adds a standalone `Patch: <patch name>` PRE comment for enabled patches. The generated default name `Patch @ <address>` is never added.
@@ -46,6 +46,7 @@ Actions are registered as normal Ghidra Docking actions, so their default keybin
 | Patch Info At Location | `Ctrl+Alt+Shift + I` | CodeBrowser, only when patch exists at current location |
 | Edit Patch | `Ctrl+Alt+Shift + E` | Patch Manager selection |
 | Delete Patch | `Ctrl+Alt+Shift + D` | Patch Manager selection |
+| Show Orginal Dissassembly | `Ctrl+Alt+Shift + O` | CodeBrowser |
 | Enable All Patches | `Ctrl+Alt+Shift + Y` | Patch Manager |
 | Disable All Patches | `Ctrl+Alt+Shift + N` | Patch Manager |
 | Patch Info | `Ctrl+Alt+Shift + U` | Patch Manager selection |
@@ -59,7 +60,7 @@ The manager's **Edit Patch**, **Delete Patch**, **Enable All**, **Disable All**,
 
 ## Original disassembly comments
 
-The **Show Original Disassembly Comments** option is enabled by default under `Edit -> Tool Options -> Ghidra Patch Manager`. When an enabled patch has captured original disassembly, the extension stores it as a managed `PRE` comment anchored to the instruction that currently contains the patch start. `PRE` comments appear above the instruction, so the annotation does not depend on patched/original instruction line counts matching.
+The **Show Original Disassembly Comments by Default** option is disabled by default under `Edit -> Tool Options -> Ghidra Patch Manager`. It controls only the initial state of the **Show Orig** button when the tool starts; changing this setting does not change the button during the current session. When an enabled patch has captured original disassembly, the extension stores it as a managed `PRE` comment anchored to the instruction that currently contains the patch start. `PRE` comments appear above the instruction, so the annotation does not depend on patched/original instruction line counts matching.
 
 The **Show Patch Names in Comments** option is also enabled by default. For a patch with a custom name, the managed block begins with `[Original disassembly @ ...] - Patch: <patch name>`. When original-disassembly comments are disabled, the same option produces a standalone `Patch: <patch name>` PRE comment instead. The automatically generated `Patch @ <address>` name is treated as the default and is not written into comments.
 
@@ -110,6 +111,12 @@ The plugin intentionally does not silently overwrite a location whose current by
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 25**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
 ---
+
+## 1.3.4 Changes
+
+- Renamed **Show Original Disassembly Comments** to **Show Original Disassembly Comments by Default** and changed its default to disabled.
+- Added the **Show Orig** toggle button next to **Delete**, with `Ctrl+Alt+Shift + O` keybinding.
+- The Tool Option now controls only the initial **Show Orig** state at tool startup; the button controls the live original-disassembly comment visibility for the current session.
 
 ## 1.3.3 Changes
 

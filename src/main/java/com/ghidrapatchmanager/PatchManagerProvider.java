@@ -11,9 +11,11 @@ import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.swing.AbstractButton;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.JButton;
+import javax.swing.JToggleButton;
 import javax.swing.Icon;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -58,6 +60,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     private final JButton toggleButton = new JButton("Toggle");
     private final JButton infoButton = new JButton("Patch Info");
     private final JButton deleteButton = new JButton("Delete");
+    private final JToggleButton showOriginalButton = new JToggleButton("Show Orig");
     private final JButton captureButton = new JButton("Capture Existing...");
     private final JButton enableAllButton = new JButton("Enable All");
     private final JButton disableAllButton = new JButton("Disable All");
@@ -68,22 +71,25 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
     private final JPanel buttonBar = new JPanel(new BorderLayout());
     private final JPanel buttonStrip = new JPanel();
     private final JButton overflowButton = new JButton("\u22ee");
-    private final List<JButton> actionButtons = List.of(
-        addButton, captureButton, editButton, toggleButton, infoButton, deleteButton,
+    private final List<AbstractButton> actionButtons = List.of(
+        addButton, captureButton, editButton, toggleButton, infoButton, deleteButton, showOriginalButton,
         enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
     );
-    private List<JButton> visibleButtons = new ArrayList<>();
+    private List<AbstractButton> visibleButtons = new ArrayList<>();
     private boolean updatingOverflow;
 
     private boolean layingOutColumns;
     private boolean userResizedColumns;
 
-    PatchManagerProvider(PluginTool tool, PatchManagerPlugin plugin) {
+    private final boolean showOriginalDisassemblyComments_initial;
+
+    PatchManagerProvider(PluginTool tool, PatchManagerPlugin plugin, boolean showOriginalDisassemblyComments) {
         super(tool, TITLE, plugin.getName());
         this.plugin = plugin;
         this.model = new PatchTableModel(plugin);
         this.table = new JTable(model);
         this.scrollPane = new JScrollPane(table);
+        this.showOriginalDisassemblyComments_initial = showOriginalDisassemblyComments;
 
         buildUi();
     }
@@ -92,8 +98,8 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         return ResourceManager.getScaledIcon(icon, ICON_SIZE, ICON_SIZE);
     }
 
-    private static void equalizeHeights(JButton... buttons) {
-        int maxHeight = 0;
+    private static void equalizeHeights(JToggleButton toggleButton, JButton... buttons) {
+        int maxHeight = toggleButton.getPreferredSize().height;
         for (JButton b : buttons) {
             maxHeight = Math.max(maxHeight, b.getPreferredSize().height);
         }
@@ -101,6 +107,8 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
             Dimension d = b.getPreferredSize();
             b.setPreferredSize(new Dimension(d.width, maxHeight));
         }
+        Dimension tb_d = toggleButton.getPreferredSize();
+        toggleButton.setPreferredSize(new Dimension(tb_d.width, maxHeight));
     }
 
     private void buildUi() {
@@ -141,6 +149,12 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         deleteButton.setIconTextGap(4);
         deleteButton.setToolTipText("Delete the selected patch or patches (Ctrl+Alt+Shift + D)");
 
+        showOriginalButton.setIcon(sizedIcon(new GIcon("icon.filter.options.contains")));
+        showOriginalButton.setIconTextGap(4);
+        showOriginalButton.setToolTipText(
+                "Show or hide original-disassembly comments (Ctrl+Alt+Shift + O)");
+        showOriginalButton.setSelected(this.showOriginalDisassemblyComments_initial);
+
         enableAllButton.setIcon(sizedIcon(new GIcon("icon.plugin.bundlemanager.enable")));
         enableAllButton.setIconTextGap(4);
         enableAllButton.setToolTipText("Enable all patches (Ctrl+Alt+Shift + Y)");
@@ -162,7 +176,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         refreshButton.setToolTipText("Refresh patch states (Ctrl+Alt+Shift + R)");
 
         equalizeHeights(
-            addButton, captureButton, editButton, toggleButton, infoButton, deleteButton,
+            showOriginalButton, addButton, captureButton, editButton, toggleButton, infoButton, deleteButton,
             enableAllButton, disableAllButton, saveButton, loadButton, refreshButton
         );
 
@@ -172,6 +186,8 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         toggleButton.addActionListener(e -> plugin.toggleSelectedPatch());
         infoButton.addActionListener(e -> plugin.showPatchInfoForSelectedPatch());
         deleteButton.addActionListener(e -> plugin.deleteSelectedPatches());
+        showOriginalButton.addActionListener(e ->
+                plugin.setOriginalDisassemblyCommentsVisible(showOriginalButton.isSelected()));
         enableAllButton.addActionListener(e -> plugin.setAllPatchesEnabled(true));
         disableAllButton.addActionListener(e -> plugin.setAllPatchesEnabled(false));
         saveButton.addActionListener(e -> plugin.exportPatchSet());
@@ -217,9 +233,9 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
                 ? Math.max(0, availableWidth - overflowButton.getPreferredSize().width - BUTTON_GAP)
                 : availableWidth;
 
-            List<JButton> nextVisible = new ArrayList<>();
+            List<AbstractButton> nextVisible = new ArrayList<>();
             int used = 0;
-            for (JButton button : actionButtons) {
+            for (AbstractButton button : actionButtons) {
                 int width = button.getPreferredSize().width;
                 int candidate = nextVisible.isEmpty() ? width : used + BUTTON_GAP + width;
                 if (candidate > budget) {
@@ -255,7 +271,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         }
     }
 
-    private static int totalButtonWidth(List<JButton> buttons) {
+    private static int totalButtonWidth(List<? extends AbstractButton> buttons) {
         int total = 0;
         for (int i = 0; i < buttons.size(); i++) {
             if (i != 0) {
@@ -272,7 +288,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         }
 
         JPopupMenu menu = new JPopupMenu();
-        for (JButton button : actionButtons) {
+        for (AbstractButton button : actionButtons) {
             if (visibleButtons.contains(button)) {
                 continue;
             }
@@ -429,6 +445,11 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         return null;
     }
 
+    void setShowOriginalDisassemblyCommentsButtonState(boolean selected) {
+        if (showOriginalButton.isSelected() != selected) {
+            showOriginalButton.setSelected(selected);
+        }
+    }
 
     private JPanel statusLabelPanel() {
         JPanel bottom = new JPanel(new BorderLayout());
@@ -502,6 +523,7 @@ final class PatchManagerProvider extends ComponentProviderAdapter {
         toggleButton.setEnabled(hasPatch && !busy && plugin.selectedPatchIsEditable());
         infoButton.setEnabled(hasPatch && !busy);
         deleteButton.setEnabled(hasSelection && !busy);
+        showOriginalButton.setEnabled(!busy && plugin.getCurrentProgram() != null);
         plugin.notifyContextChanged();
     }
 }

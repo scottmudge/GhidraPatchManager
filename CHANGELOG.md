@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.4
+- Renamed **Show Original Disassembly Comments** to **Show Original Disassembly Comments by Default** and changed its default to disabled.
+- Added the **Show Orig** toggle button immediately to the right of **Delete**.
+- Added `Ctrl+Alt+Shift + O` to toggle original-disassembly comments.
+- The Tool Option now supplies only the initial button state when the tool starts; the button controls the live comment visibility.
+
 ## 1.3.3
 - Added **Show Patch Names in Comments**, enabled by default, under **Edit -> Tool Options -> Ghidra Patch Manager**.
 - Custom patch names are appended to the first line of the managed original-disassembly comment as ` - Patch: <patch name>`.

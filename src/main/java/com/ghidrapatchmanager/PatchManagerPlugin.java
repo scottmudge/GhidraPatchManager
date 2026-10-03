@@ -66,7 +66,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private static final int FORMAT_VERSION = 1;
     private static final int HOTKEY_MODIFIERS = java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.ALT_DOWN_MASK;
     private static final int HOTKEY_SHIFT_MODIFIERS = HOTKEY_MODIFIERS | java.awt.event.InputEvent.SHIFT_DOWN_MASK;
-    private static final String ORIGINAL_DISASSEMBLY_OPTION = "Show Original Disassembly Comments";
+    private static final String ORIGINAL_DISASSEMBLY_OPTION = "Show Original Disassembly Comments by Default";
     private static final String PATCH_NAME_OPTION = "Show Patch Names in Comments";
     private static final String PATCH_NAME_PREFIX = "Patch: ";
     private static final String ORIGINAL_COMMENT_PREFIX = "[Original disassembly @ ";
@@ -83,6 +83,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private List<Patch> patches = new ArrayList<>();
     private boolean busy;
     private boolean internalChange;
+    private boolean showOriginalDisassemblyComments;
     private PatchHighlightManager highlightManager;
     private ToolOptions patchToolOptions;
     private boolean originalDisassemblyReconcilePending;
@@ -90,8 +91,7 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     private final OptionsChangeListener patchToolOptionsListener = new OptionsChangeListener() {
         @Override
         public void optionsChanged(ToolOptions options, String optionName, Object oldValue, Object newValue) {
-            if (options == patchToolOptions
-                    && (ORIGINAL_DISASSEMBLY_OPTION.equals(optionName) || PATCH_NAME_OPTION.equals(optionName))) {
+                if (options == patchToolOptions && PATCH_NAME_OPTION.equals(optionName)) {
                 requestOriginalDisassemblyReconcile();
             }
         }
@@ -104,12 +104,14 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     @Override
     protected void init() {
         super.init();
-        provider = new PatchManagerProvider(tool, this);
         patchToolOptions = tool.getOptions(OPTION_PATH);
-        patchToolOptions.registerOption(ORIGINAL_DISASSEMBLY_OPTION, Boolean.TRUE, null,
-                "Show a gold-highlighted PRE comment containing the original disassembly for enabled patches.");
+        patchToolOptions.registerOption(ORIGINAL_DISASSEMBLY_OPTION, Boolean.FALSE, null,
+                "Set the initial state of the Patch Manager's Show Orig button when the tool starts.");
         patchToolOptions.registerOption(PATCH_NAME_OPTION, Boolean.TRUE, null,
                 "Show custom patch names in managed PRE comments for enabled patches.");
+        showOriginalDisassemblyComments =
+                patchToolOptions.getBoolean(ORIGINAL_DISASSEMBLY_OPTION, false);
+        provider = new PatchManagerProvider(tool, this, showOriginalDisassemblyComments);
         patchToolOptions.addOptionsChangeListener(patchToolOptionsListener);
         highlightManager = new PatchHighlightManager(this, tool);
         tool.addComponentProvider(provider, false);
@@ -140,6 +142,10 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         registerGlobalAction("Patch Manager: Patch Info At Location", "Show Patch Info for the managed patch containing the current CodeBrowser location",
                 java.awt.event.KeyEvent.VK_I, context -> showPatchInfo(patchForContext(context)),  true,
                 context -> patchForContext(context) != null && activeProgram != null);
+        registerGlobalAction("Patch Manager: Toggle Original Disassembly Comments",
+                "Toggle managed original-disassembly comments",
+                java.awt.event.KeyEvent.VK_O, context -> toggleOriginalDisassemblyComments(), true,
+                context -> activeProgram != null && !busy);
 
         registerManagerAction("Patch Manager: Edit Patch", "Edit the selected patch",
                 java.awt.event.KeyEvent.VK_E, this::editSelectedPatch, true,
@@ -323,7 +329,25 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
     }
 
     boolean isOriginalDisassemblyCommentsEnabled() {
-        return patchToolOptions == null || patchToolOptions.getBoolean(ORIGINAL_DISASSEMBLY_OPTION, true);
+        return showOriginalDisassemblyComments;
+    }
+
+    void toggleOriginalDisassemblyComments() {
+        setOriginalDisassemblyCommentsVisible(!showOriginalDisassemblyComments);
+    }
+
+    void setOriginalDisassemblyCommentsVisible(boolean visible) {
+        if (showOriginalDisassemblyComments == visible) {
+            if (provider != null) {
+                provider.setShowOriginalDisassemblyCommentsButtonState(visible);
+            }
+            return;
+        }
+        showOriginalDisassemblyComments = visible;
+        if (provider != null) {
+            provider.setShowOriginalDisassemblyCommentsButtonState(visible);
+        }
+        requestOriginalDisassemblyReconcile();
     }
 
     boolean isPatchNameCommentsEnabled() {
@@ -1341,11 +1365,16 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 + "\n" + originalCommentEnd(patch);
     }
 
-    private static boolean hasCustomPatchName(Patch patch) {
+    private boolean hasCustomPatchName(Patch patch) {
         if (patch == null || patch.name == null || patch.name.isBlank()) {
             return false;
         }
-        return !patch.name.equals("Patch @ " + patch.address);
+        // Only hide the default patch name if original disassembly comments are enabled. Otherwise
+        // display the default patch name.
+        if (isOriginalDisassemblyCommentsEnabled()) {
+            return !patch.name.equals("Patch @ " + patch.address);
+        }
+        return true;
     }
 
     private static String originalCommentStart(Patch patch) {
@@ -1392,8 +1421,8 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         return String.join("\n", kept);
     }
 
-    private static String removeManagedPatchNameComment(String comment, Patch patch) {
-        if (comment == null || comment.isEmpty() || !hasCustomPatchName(patch)) {
+    private String removeManagedPatchNameComment(String comment, Patch patch) {
+        if (comment == null || comment.isEmpty()) {
             return comment;
         }
         String managed = PATCH_NAME_PREFIX + patch.name;
