@@ -1571,13 +1571,21 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
         if (rows.length == 0 || !canEditPatches()) {
             return;
         }
+
+        javax.swing.JCheckBox restoreOriginals =
+                new javax.swing.JCheckBox("Restore original bytes before deleting", true);
+        javax.swing.JPanel confirmation = new javax.swing.JPanel(new java.awt.BorderLayout(0, 8));
+        confirmation.add(new javax.swing.JLabel(
+                "Delete " + rows.length + " patch" + (rows.length == 1 ? "" : "es")
+                        + " from Patch Manager?"), java.awt.BorderLayout.NORTH);
+        confirmation.add(restoreOriginals, java.awt.BorderLayout.SOUTH);
+
         int answer = JOptionPane.showConfirmDialog(provider.getComponent(),
-                "Delete " + rows.length + " patch" + (rows.length == 1 ? "" : "es") + " from Patch Manager?\n\n"
-                        + "This does not restore bytes. Disable a patch first if you want the program reverted.",
-                "Delete Patches", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+                confirmation, "Delete Patches", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) {
             return;
         }
+
         List<Patch> remove = new ArrayList<>();
         for (int row : rows) {
             Patch p = provider.getModel().getPatch(row);
@@ -1585,21 +1593,142 @@ public class PatchManagerPlugin extends ProgramPlugin implements DomainObjectLis
                 remove.add(p);
             }
         }
-        int commentTx = activeProgram.startTransaction("Remove Ghidra Patch Manager comments");
-        try {
+        if (remove.isEmpty() || !canEditPatches()) {
+            return;
+        }
+
+        Program program = activeProgram;
+        boolean restore = restoreOriginals.isSelected();
+        List<Patch> enabledToRestore = new ArrayList<>();
+        List<ReassemblyRange> reassemblyRanges = new ArrayList<>();
+
+        if (restore) {
+            // Do not silently overwrite unexpected bytes merely because the user chose the
+            // restore option. Disabled patches already have their original bytes present, while
+            // conflicts/missing patches must be resolved explicitly by the user.
             for (Patch patch : remove) {
-                removeOriginalDisassemblyComment(activeProgram, patch);
+                PatchState state = patch.getState(program);
+                if (state == PatchState.CONFLICT || state == PatchState.MISSING) {
+                    showConflict(patch, state);
+                    return;
+                }
+                if (state == PatchState.ENABLED) {
+                    enabledToRestore.add(patch);
+                    ReassemblyRange range = prepareReassembly(program, patch.address, patch.getEndAddress());
+                    if (range != null) {
+                        reassemblyRanges.add(range);
+                    }
+                }
             }
-            activeProgram.endTransaction(commentTx, true);
+        }
+
+        busy = true;
+        internalChange = true;
+        boolean committed = false;
+        int tx = program.startTransaction(restore
+                ? "Restore and delete Ghidra patches"
+                : "Delete Ghidra patches");
+        try {
+            // Clear only the code units intersected by each enabled patch while their current
+            // (possibly differently-sized) instructions still exist.  This is essential when
+            // restoring an original instruction whose size differs from the patched decoding.
+            if (restore) {
+                for (ReassemblyRange range : mergeRanges(reassemblyRanges)) {
+                    program.getListing().clearCodeUnits(range.start(), range.end(), false,
+                            TaskMonitor.DUMMY);
+                }
+                for (Patch patch : enabledToRestore) {
+                    program.getMemory().setBytes(patch.address, patch.originalBytes);
+                }
+            }
+
+            // Remove managed PRE comment blocks in the same transaction as the deletion.
+            for (Patch patch : remove) {
+                removeOriginalDisassemblyComment(program, patch);
+            }
+            committed = true;
+        }
+        catch (Exception e) {
+            showError("Unable to delete selected patches: " + e.getMessage(), "Delete Patches");
+        }
+        finally {
+            program.endTransaction(tx, committed);
+            internalChange = false;
+        }
+
+        if (!committed) {
+            busy = false;
+            refreshProvider();
+            return;
+        }
+
+        patches.removeAll(remove);
+        try {
+            saveToProgram();
         }
         catch (RuntimeException e) {
-            activeProgram.endTransaction(commentTx, false);
-            throw e;
+            Msg.error(this, "Unable to persist Patch Manager state after deleting patches", e);
         }
-        patches.removeAll(remove);
-        saveToProgram();
+        refreshProvider();
+
+        List<ReassemblyRange> mergedRanges = mergeRanges(reassemblyRanges);
+        if (!restore || mergedRanges.isEmpty()) {
+            busy = false;
+            requestOriginalDisassemblyReconcile();
+            return;
+        }
+
+        Program programAtSchedule = program;
+        tool.executeBackgroundCommand(new BackgroundCommand<Program>(
+                "Re-disassemble restored Ghidra patches", true, false, false) {
+            @Override
+            public boolean applyTo(Program targetProgram, TaskMonitor monitor) {
+                boolean success = true;
+                try {
+                    for (ReassemblyRange range : mergedRanges) {
+                        if (monitor.isCancelled()) {
+                            success = false;
+                            return false;
+                        }
+                        DisassembleCommand command = createReassemblyCommand(range);
+                        if (!command.applyTo(targetProgram, monitor)) {
+                            success = false;
+                        }
+                    }
+                    return success;
+                }
+                catch (RuntimeException e) {
+                    success = false;
+                    Msg.error(PatchManagerPlugin.this,
+                            "Automatic re-disassembly after restoring deleted patches failed", e);
+                    return false;
+                }
+                finally {
+                    boolean finalSuccess = success;
+                    javax.swing.SwingUtilities.invokeLater(() ->
+                            finishDeletedPatchReassembly(programAtSchedule, finalSuccess, remove.size()));
+                }
+            }
+        }, programAtSchedule);
+    }
+
+    private void finishDeletedPatchReassembly(Program program, boolean success, int count) {
+        busy = false;
+        if (activeProgram != program) {
+            refreshProvider();
+            return;
+        }
         refreshProvider();
         requestOriginalDisassemblyReconcile();
+        if (success) {
+            provider.setStatus("Deleted " + count + " patch" + (count == 1 ? "" : "es")
+                    + " and restored original bytes.");
+        }
+        else {
+            provider.setStatus("Deleted " + count
+                    + " patch" + (count == 1 ? "" : "es")
+                    + "; original bytes restored, but automatic re-disassembly did not complete.");
+        }
     }
 
     void jumpToSelectedPatch() {

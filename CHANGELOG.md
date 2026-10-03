@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.2
+- Added a confirmation checkbox to **Delete Patch**, enabled by default, to restore original bytes before deleting enabled patches.
+- Restoring deleted enabled patches now clears only the affected instruction units and automatically re-disassembles those ranges.
+- Managed original-disassembly PRE comments are removed in the same deletion transaction.
+- Delete now refuses the restore operation for conflict/missing patches instead of overwriting unexpected bytes.
+
 ## 1.3.1
 - Fixed automatic patch re-disassembly overreach when a patch changes instruction length or instruction count.
 - The code-clear range is now limited to the complete instruction units actually intersecting the patch instead of using an executable 16-byte look-ahead.

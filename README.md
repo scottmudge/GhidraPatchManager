@@ -28,6 +28,7 @@ A Ghidra 12.x extension for managing fixed-length byte patches as first-class, t
 - Export/import patch sets as simple Java-Properties text files suitable for version control.
 - **Original disassembly comments:** when enabled (the default), every enabled patch gets a managed **PRE comment** above the current instruction containing the patch. The comment records the original disassembly before the patch, including all original instructions covered by the patch. This remains correct even when the patched bytes decode into a different number of instructions.
 - Original-disassembly comments use a distinct gold/yellow background and are automatically removed when the patch is disabled or deleted. Unrelated user PRE comments are preserved.
+- **Delete Patch:** the confirmation dialog includes a **Restore original bytes before deleting** checkbox, enabled by default. When enabled, any selected enabled patches are reverted to their stored original bytes, the affected code units are cleared, and the restored ranges are automatically re-disassembled before deletion completes. Managed original-disassembly comments are removed as part of the same deletion operation.
 - Conflict detection: a patch is only toggled when the current bytes exactly match either its stored original or patched bytes.
 - Fixed-length, non-overlapping patches keep toggling deterministic.
 
@@ -106,6 +107,12 @@ The plugin intentionally does not silently overwrite a location whose current by
 The extension should be built against the Ghidra version you intend to use. The project is currently written for **Ghidra 12.1.x / JDK 25**. The highlighting implementation uses Ghidra's public `MarkerService`, `ToolOptions`/`OptionsChangeListener`, and theme-listener APIs rather than private CodeBrowser line-number state.
 
 ---
+
+## 1.3.2 Changes
+
+- Delete Patch can optionally restore original bytes before removing the patch definition (enabled by default).
+- Restored code is automatically cleared and re-disassembled after deletion.
+- Managed original-disassembly comments are removed during deletion.
 
 ## 1.3.1 Changes
 
